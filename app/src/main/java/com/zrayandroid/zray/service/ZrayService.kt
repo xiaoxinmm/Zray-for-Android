@@ -1,0 +1,102 @@
+package com.zrayandroid.zray.service
+
+import android.app.*
+import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
+import com.zrayandroid.zray.MainActivity
+import com.zrayandroid.zray.R
+import com.zrayandroid.zray.core.ZrayCoreMock
+import kotlinx.coroutines.*
+
+class ZrayService : Service() {
+
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var config: String = ""
+
+    companion object {
+        const val CHANNEL_ID = "zray_service"
+        const val NOTIFICATION_ID = 1
+        const val ACTION_START = "com.zrayandroid.zray.START"
+        const val ACTION_STOP = "com.zrayandroid.zray.STOP"
+        const val EXTRA_CONFIG = "config"
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_START -> {
+                config = intent.getStringExtra(EXTRA_CONFIG) ?: ""
+            }
+        }
+
+        val notification = buildNotification("Zray 运行中")
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+
+        scope.launch {
+            ZrayCoreMock.start(config)
+        }
+
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        scope.launch { ZrayCoreMock.stop() }
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun buildNotification(text: String): Notification {
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, openIntent, PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val stopIntent = Intent(this, ZrayService::class.java).apply {
+            action = ACTION_STOP
+        }
+        val stopPending = PendingIntent.getService(
+            this, 1, stopIntent, PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Zray")
+            .setContentText(text)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(pendingIntent)
+            .addAction(0, "停止", stopPending)
+            .setOngoing(true)
+            .build()
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                getString(R.string.channel_name),
+                NotificationManager.IMPORTANCE_LOW
+            )
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+    }
+}
