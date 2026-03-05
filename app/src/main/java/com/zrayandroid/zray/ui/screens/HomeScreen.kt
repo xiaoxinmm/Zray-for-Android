@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun HomeScreen(
     isConnected: Boolean,
+    isConnecting: Boolean = false,
     hasProfile: Boolean,
     activeProfileName: String?,
     onToggle: () -> Unit,
@@ -150,15 +151,24 @@ fun HomeScreen(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            if (isConnected) Icons.Default.PowerSettingsNew else Icons.Default.Power,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(36.dp)
-                        )
+                        if (isConnecting) {
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                modifier = Modifier.size(36.dp),
+                                strokeWidth = 3.dp
+                            )
+                        } else {
+                            Icon(
+                                if (isConnected) Icons.Default.PowerSettingsNew else Icons.Default.Power,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = when {
+                                isConnecting -> "连接中"
                                 !hasProfile -> "无配置"
                                 isConnected -> "断开"
                                 else -> "连接"

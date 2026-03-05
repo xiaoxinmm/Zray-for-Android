@@ -16,6 +16,7 @@ class ZrayService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var config: String = ""
+    private var socksPort: Int = 1081
 
     companion object {
         const val CHANNEL_ID = "zray_service"
@@ -23,6 +24,7 @@ class ZrayService : Service() {
         const val ACTION_START = "com.zrayandroid.zray.START"
         const val ACTION_STOP = "com.zrayandroid.zray.STOP"
         const val EXTRA_CONFIG = "config"
+        const val EXTRA_PORT = "socks_port"
     }
 
     override fun onCreate() {
@@ -34,15 +36,17 @@ class ZrayService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                ZrayCoreMock.stop()
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_START -> {
                 config = intent.getStringExtra(EXTRA_CONFIG) ?: ""
+                socksPort = intent.getIntExtra(EXTRA_PORT, 1081)
             }
         }
 
-        val notification = buildNotification("Zray 运行中")
+        val notification = buildNotification("Zray 运行中 · SOCKS5 :$socksPort")
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -51,8 +55,8 @@ class ZrayService : Service() {
         }
 
         scope.launch {
-            DebugLog.log("SERVICE", "启动核心...")
-            ZrayCoreMock.start(config)
+            DebugLog.log("SERVICE", "启动核心, 端口: $socksPort")
+            ZrayCoreMock.start(config, socksPort)
             DebugLog.log("SERVICE", "核心已启动")
         }
 
@@ -61,7 +65,7 @@ class ZrayService : Service() {
 
     override fun onDestroy() {
         DebugLog.log("SERVICE", "ZrayService onDestroy")
-        scope.launch { ZrayCoreMock.stop() }
+        ZrayCoreMock.stop()
         scope.cancel()
         super.onDestroy()
     }
