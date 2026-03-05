@@ -195,23 +195,24 @@ fun ZrayApp(
                                 isConnecting = true
                                 DebugLog.log("UI", "尝试连接: ${activeProfile.name}")
                                 
-                                // 先停止旧的
-                                onStopService()
-                                kotlinx.coroutines.delay(300)
-                                
-                                // 异步启动核心
-                                com.zrayandroid.zray.core.ZrayCoreMock.startAsync(config, socksPort) { success, error ->
-                                    scope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                                        isConnecting = false
-                                        if (success) {
-                                            isConnected = true
-                                            // 也启动前台服务保活
-                                            onStartService(config, socksPort)
-                                            DebugLog.log("UI", "连接成功")
-                                        } else {
-                                            isConnected = false
-                                            errorMessage = error ?: "连接失败"
-                                            DebugLog.log("ERROR", "连接失败: $error")
+                                scope.launch {
+                                    // 先停止旧的
+                                    onStopService()
+                                    kotlinx.coroutines.delay(300)
+                                    
+                                    // 异步启动核心
+                                    com.zrayandroid.zray.core.ZrayCoreMock.startAsync(config, socksPort) { success, error ->
+                                        scope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                            isConnecting = false
+                                            if (success) {
+                                                isConnected = true
+                                                onStartService(config, socksPort)
+                                                DebugLog.log("UI", "连接成功")
+                                            } else {
+                                                isConnected = false
+                                                errorMessage = error ?: "连接失败"
+                                                DebugLog.log("ERROR", "连接失败: $error")
+                                            }
                                         }
                                     }
                                 }
