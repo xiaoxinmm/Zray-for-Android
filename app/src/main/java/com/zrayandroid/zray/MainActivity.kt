@@ -7,9 +7,9 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,7 +20,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.zrayandroid.zray.core.DebugLog
-import com.zrayandroid.zray.core.ZrayCoreMock
 import com.zrayandroid.zray.navigation.Screen
 import com.zrayandroid.zray.navigation.screens
 import com.zrayandroid.zray.service.ZrayService
@@ -29,6 +28,8 @@ import com.zrayandroid.zray.ui.screens.*
 import com.zrayandroid.zray.ui.theme.ZrayTheme
 import java.util.UUID
 
+const val APP_VERSION = "1.1.0"
+
 class MainActivity : ComponentActivity() {
 
     private val notificationPermission = registerForActivityResult(
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
     ) { /* granted or not */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge() // 沉浸式状态栏 + 导航栏
         super.onCreate(savedInstanceState)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -46,7 +48,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        DebugLog.log("APP", "Zray for Android v1.0.2 启动")
+        DebugLog.log("APP", "Zray for Android v$APP_VERSION 启动")
         DebugLog.log("APP", "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         DebugLog.log("APP", "设备: ${Build.MANUFACTURER} ${Build.MODEL}")
 
@@ -97,9 +99,16 @@ fun ZrayApp(
     var activeProfileId by remember { mutableStateOf<String?>(null) }
     var debugEnabled by remember { mutableStateOf(false) }
 
+    val activeProfile = profiles.find { it.id == activeProfileId }
+
     Scaffold(
+        modifier = Modifier.fillMaxSize(),
         bottomBar = {
-            NavigationBar {
+            NavigationBar(
+                modifier = Modifier.windowInsetsPadding(
+                    WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)
+                )
+            ) {
                 screens.forEach { screen ->
                     NavigationBarItem(
                         icon = { Icon(screen.icon, contentDescription = screen.label) },
@@ -117,9 +126,15 @@ fun ZrayApp(
                     )
                 }
             }
-        }
+        },
+        contentWindowInsets = WindowInsets(0)
     ) { innerPadding ->
-        Box(modifier = Modifier.padding(innerPadding)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .windowInsetsPadding(WindowInsets.statusBars)
+        ) {
             NavHost(
                 navController = navController,
                 startDestination = Screen.Home.route,
@@ -127,22 +142,27 @@ fun ZrayApp(
                 composable(Screen.Home.route) {
                     HomeScreen(
                         isConnected = isConnected,
+                        hasProfile = profiles.isNotEmpty() && activeProfileId != null,
+                        activeProfileName = activeProfile?.name,
                         onToggle = {
                             if (isConnected) {
                                 onStopService()
                                 isConnected = false
                                 DebugLog.log("UI", "用户点击断开")
-                            } else {
-                                val activeProfile = profiles.find { it.id == activeProfileId }
-                                val config = activeProfile?.link ?: ""
-                                if (config.isEmpty()) {
-                                    DebugLog.log("UI", "无活跃配置，使用空配置启动")
+                            } else if (activeProfile != null) {
+                                val config = if (activeProfile.server.isNotEmpty()) {
+                                    activeProfile.toConfigJson(socksPort)
                                 } else {
-                                    DebugLog.log("UI", "使用配置启动: ${activeProfile?.name}")
+                                    activeProfile.link
                                 }
+                                if (config.isBlank()) {
+                                    DebugLog.log("UI", "配置为空，无法启动")
+                                    return@HomeScreen
+                                }
+                                DebugLog.log("UI", "使用配置启动: ${activeProfile.name}")
+                                DebugLog.log("UI", "服务器: ${activeProfile.server}:${activeProfile.port}")
                                 onStartService(config)
                                 isConnected = true
-                                DebugLog.log("UI", "用户点击连接")
                             }
                         },
                         socksPort = socksPort
@@ -152,13 +172,14 @@ fun ZrayApp(
                 composable(Screen.Profiles.route) {
                     ProfilesScreen(
                         profiles = profiles.map { it.copy(isActive = it.id == activeProfileId) },
-                        onAddProfile = { link ->
-                            val id = UUID.randomUUID().toString()
-                            val name = "配置 ${profiles.size + 1}"
-                            profiles = profiles + Profile(id, name, link)
-                            if (activeProfileId == null) activeProfileId = id
-                            DebugLog.log("PROFILE", "添加配置: $name")
-                            DebugLog.log("PROFILE", "链接: ${link.take(30)}...")
+                        onAddProfile = { profile ->
+                            profiles = profiles + profile
+                            if (activeProfileId == null) activeProfileId = profile.id
+                            DebugLog.log("PROFILE", "添加: ${profile.name} (${profile.displayInfo})")
+                        },
+                        onUpdateProfile = { updated ->
+                            profiles = profiles.map { if (it.id == updated.id) updated else it }
+                            DebugLog.log("PROFILE", "更新: ${updated.name} → ${updated.server}:${updated.port}")
                         },
                         onSelectProfile = { id ->
                             activeProfileId = id
@@ -169,7 +190,7 @@ fun ZrayApp(
                             val p = profiles.find { it.id == id }
                             profiles = profiles.filter { it.id != id }
                             if (activeProfileId == id) activeProfileId = profiles.firstOrNull()?.id
-                            DebugLog.log("PROFILE", "删除配置: ${p?.name}")
+                            DebugLog.log("PROFILE", "删除: ${p?.name}")
                         }
                     )
                 }
@@ -190,7 +211,7 @@ fun ZrayApp(
                 }
             }
 
-            // Debug 浮窗覆盖在内容上方
+            // Debug 浮窗
             DebugOverlay(
                 visible = debugEnabled,
                 onDismiss = { debugEnabled = false }

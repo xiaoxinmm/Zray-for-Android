@@ -7,72 +7,121 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.zrayandroid.zray.core.ZrayCoreMock
 
 @Composable
 fun HomeScreen(
     isConnected: Boolean,
+    hasProfile: Boolean,
+    activeProfileName: String?,
     onToggle: () -> Unit,
     socksPort: Int
 ) {
-    // 呼吸动画
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 0.8f,
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 0.92f,
+        targetValue = 1.0f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1500, easing = EaseInOutSine),
+            animation = tween(2000, easing = EaseInOutSine),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseScale"
+    )
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.2f,
+        targetValue = 0.6f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = EaseInOutSine),
             repeatMode = RepeatMode.Reverse
         ),
         label = "pulseAlpha"
     )
 
-    val buttonColor = if (isConnected) Color(0xFF4CAF50) else MaterialTheme.colorScheme.primary
+    val connectedColor = Color(0xFF00C853)
+    val disconnectedColor = MaterialTheme.colorScheme.primary
+    val buttonColor = if (isConnected) connectedColor else disconnectedColor
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(modifier = Modifier.height(48.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
-        // 连接状态文字
-        Text(
-            text = if (isConnected) "已连接" else "未连接",
-            style = MaterialTheme.typography.titleMedium,
-            color = if (isConnected) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        // 当前节点信息
+        if (activeProfileName != null) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Dns,
+                        contentDescription = null,
+                        tint = if (isConnected) connectedColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = activeProfileName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    if (isConnected) {
+                        Text(
+                            "● 在线",
+                            color = connectedColor,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            }
+        }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.weight(0.3f))
 
         // 大圆形开关按钮
-        Box(contentAlignment = Alignment.Center) {
-            // 呼吸光圈
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.size(200.dp)
+        ) {
+            // 外圈呼吸光环
             if (isConnected) {
                 Box(
                     modifier = Modifier
-                        .size(180.dp)
+                        .size((200 * pulseScale).dp)
                         .shadow(
-                            elevation = (pulseAlpha * 24).dp,
+                            elevation = (pulseAlpha * 32).dp,
                             shape = CircleShape,
-                            ambientColor = buttonColor.copy(alpha = pulseAlpha),
-                            spotColor = buttonColor.copy(alpha = pulseAlpha)
+                            ambientColor = connectedColor.copy(alpha = pulseAlpha * 0.5f),
+                            spotColor = connectedColor.copy(alpha = pulseAlpha * 0.5f)
                         )
                         .background(
                             brush = Brush.radialGradient(
                                 colors = listOf(
-                                    buttonColor.copy(alpha = pulseAlpha * 0.3f),
+                                    connectedColor.copy(alpha = pulseAlpha * 0.15f),
                                     Color.Transparent
                                 )
                             ),
@@ -84,69 +133,130 @@ fun HomeScreen(
             // 主按钮
             Surface(
                 modifier = Modifier
-                    .size(140.dp)
+                    .size(150.dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                        onClick = onToggle
+                        onClick = {
+                            if (hasProfile || isConnected) onToggle()
+                        }
                     ),
                 shape = CircleShape,
-                color = buttonColor,
-                shadowElevation = 8.dp,
+                color = if (!hasProfile && !isConnected)
+                    MaterialTheme.colorScheme.surfaceVariant
+                else buttonColor,
+                shadowElevation = if (isConnected) 16.dp else 8.dp,
                 tonalElevation = 4.dp
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = if (isConnected) "断开" else "连接",
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            if (isConnected) Icons.Default.PowerSettingsNew else Icons.Default.Power,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = when {
+                                !hasProfile -> "无配置"
+                                isConnected -> "断开"
+                                else -> "连接"
+                            },
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(40.dp))
+        if (!hasProfile && !isConnected) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                "请先在「配置」页添加节点",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            )
+        }
 
-        // 上传/下载速度卡片
+        Spacer(modifier = Modifier.weight(0.2f))
+
+        // 状态卡片
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            SpeedCard(
+            StatCard(
                 modifier = Modifier.weight(1f),
-                label = "↑ 上传",
-                value = if (isConnected) "0 B/s" else "--"
+                icon = Icons.Default.ArrowUpward,
+                label = "上传",
+                value = if (isConnected) "0 B/s" else "--",
+                color = Color(0xFF42A5F5)
             )
-            SpeedCard(
+            StatCard(
                 modifier = Modifier.weight(1f),
-                label = "↓ 下载",
-                value = if (isConnected) "0 B/s" else "--"
+                icon = Icons.Default.ArrowDownward,
+                label = "下载",
+                value = if (isConnected) "0 B/s" else "--",
+                color = Color(0xFF66BB6A)
             )
         }
 
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(12.dp))
 
-        // 底部状态
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            StatCard(
+                modifier = Modifier.weight(1f),
+                icon = Icons.Default.Speed,
+                label = "延迟",
+                value = if (isConnected) "-- ms" else "--",
+                color = Color(0xFFFFA726)
+            )
+            StatCard(
+                modifier = Modifier.weight(1f),
+                icon = Icons.Default.Hub,
+                label = "连接数",
+                value = if (isConnected) "0" else "--",
+                color = Color(0xFFAB47BC)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // SOCKS5 状态
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
             )
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    "SOCKS5",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Lan,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "SOCKS5",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Text(
                     "127.0.0.1:$socksPort",
                     style = MaterialTheme.typography.bodyMedium,
@@ -155,11 +265,19 @@ fun HomeScreen(
                 )
             }
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
 @Composable
-private fun SpeedCard(modifier: Modifier, label: String, value: String) {
+private fun StatCard(
+    modifier: Modifier,
+    icon: ImageVector,
+    label: String,
+    value: String,
+    color: Color
+) {
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
@@ -167,22 +285,30 @@ private fun SpeedCard(modifier: Modifier, label: String, value: String) {
             containerColor = MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(20.dp)
             )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = value,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
         }
     }
 }

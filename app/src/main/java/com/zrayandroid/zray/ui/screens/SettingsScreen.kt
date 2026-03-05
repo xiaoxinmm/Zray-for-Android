@@ -117,7 +117,7 @@ fun SettingsScreen(
             ) {
                 Text("关于", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "v1.0.2",
+                    "v${com.zrayandroid.zray.APP_VERSION}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -130,7 +130,7 @@ fun SettingsScreen(
             onDismissRequest = { showAbout = false },
             title = { Text("Zray for Android") },
             text = {
-                Text("v1.0.2\n\n轻量加密代理客户端。\n本地 SOCKS5 端口供其他代理软件接力使用。\n\nhttps://github.com/xiaoxinmm/Zray-for-Android")
+                Text("v${com.zrayandroid.zray.APP_VERSION}\n\n轻量加密代理客户端。\n本地 SOCKS5 端口供其他代理软件接力使用。\n\nhttps://github.com/xiaoxinmm/Zray-for-Android")
             },
             confirmButton = {
                 TextButton(onClick = { showAbout = false }) { Text("确定") }
