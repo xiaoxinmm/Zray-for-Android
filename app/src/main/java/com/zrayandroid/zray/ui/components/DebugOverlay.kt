@@ -71,10 +71,10 @@ fun DebugOverlay(
                     )
 
                     Row {
-                        // 复制按钮
+                        // 复制按钮（包含完整文件日志）
                         IconButton(
                             onClick = {
-                                clipboardManager.setText(AnnotatedString(DebugLog.getAllText()))
+                                clipboardManager.setText(AnnotatedString(DebugLog.getFullFileLog()))
                             },
                             modifier = Modifier.size(32.dp)
                         ) {

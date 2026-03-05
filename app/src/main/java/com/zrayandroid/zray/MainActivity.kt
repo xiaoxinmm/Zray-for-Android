@@ -43,6 +43,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
+        // 全局异常捕获
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            DebugLog.log("FATAL", "未捕获异常 [${thread.name}]: ${throwable.message}")
+            DebugLog.log("FATAL", throwable.stackTraceToString().take(500))
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED
@@ -51,6 +57,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        DebugLog.init(this) // 初始化文件日志
         DebugLog.log("APP", "Zray for Android v$APP_VERSION 启动")
         DebugLog.log("APP", "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         DebugLog.log("APP", "设备: ${Build.MANUFACTURER} ${Build.MODEL}")
@@ -196,9 +203,9 @@ fun ZrayApp(
                                 DebugLog.log("UI", "尝试连接: ${activeProfile.name}")
                                 
                                 scope.launch {
-                                    // 先停止旧的
-                                    onStopService()
-                                    kotlinx.coroutines.delay(300)
+                                    // 先停旧核心（不停Service，避免闪退）
+                                    com.zrayandroid.zray.core.ZrayCoreMock.stop()
+                                    kotlinx.coroutines.delay(200)
                                     
                                     // 异步启动核心
                                     com.zrayandroid.zray.core.ZrayCoreMock.startAsync(config, socksPort) { success, error ->
@@ -206,6 +213,7 @@ fun ZrayApp(
                                             isConnecting = false
                                             if (success) {
                                                 isConnected = true
+                                                // 核心成功后再启动前台服务保活
                                                 onStartService(config, socksPort)
                                                 DebugLog.log("UI", "连接成功")
                                             } else {
