@@ -9,6 +9,7 @@ import androidx.core.app.NotificationCompat
 import com.zrayandroid.zray.MainActivity
 import com.zrayandroid.zray.R
 import com.zrayandroid.zray.core.ZrayCoreMock
+import com.zrayandroid.zray.core.DebugLog
 import kotlinx.coroutines.*
 
 class ZrayService : Service() {
@@ -27,6 +28,7 @@ class ZrayService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        DebugLog.log("SERVICE", "ZrayService onCreate")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -49,13 +51,16 @@ class ZrayService : Service() {
         }
 
         scope.launch {
+            DebugLog.log("SERVICE", "启动核心...")
             ZrayCoreMock.start(config)
+            DebugLog.log("SERVICE", "核心已启动")
         }
 
         return START_STICKY
     }
 
     override fun onDestroy() {
+        DebugLog.log("SERVICE", "ZrayService onDestroy")
         scope.launch { ZrayCoreMock.stop() }
         scope.cancel()
         super.onDestroy()

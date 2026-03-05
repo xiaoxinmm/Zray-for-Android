@@ -5,6 +5,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -13,7 +14,9 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun SettingsScreen(
     socksPort: Int,
-    onPortChange: (Int) -> Unit
+    onPortChange: (Int) -> Unit,
+    debugEnabled: Boolean,
+    onDebugToggle: (Boolean) -> Unit
 ) {
     var portText by remember { mutableStateOf(socksPort.toString()) }
     var showAbout by remember { mutableStateOf(false) }
@@ -42,30 +45,56 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.titleSmall
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(
+                OutlinedTextField(
+                    value = portText,
+                    onValueChange = {
+                        portText = it
+                        it.toIntOrNull()?.let { port ->
+                            if (port in 1024..65535) onPortChange(port)
+                        }
+                    },
+                    label = { Text("端口") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    OutlinedTextField(
-                        value = portText,
-                        onValueChange = {
-                            portText = it
-                            it.toIntOrNull()?.let { port ->
-                                if (port in 1024..65535) onPortChange(port)
-                            }
-                        },
-                        label = { Text("端口") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                }
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp)
+                )
                 Text(
                     "监听地址: 127.0.0.1:$portText",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                     modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Debug 开关
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Debug 日志", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "开启后在顶部显示实时日志窗口",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+                Switch(
+                    checked = debugEnabled,
+                    onCheckedChange = onDebugToggle
                 )
             }
         }
@@ -88,7 +117,7 @@ fun SettingsScreen(
             ) {
                 Text("关于", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "v1.0.0",
+                    "v1.0.2",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -101,7 +130,7 @@ fun SettingsScreen(
             onDismissRequest = { showAbout = false },
             title = { Text("Zray for Android") },
             text = {
-                Text("v1.0.0\n\n轻量加密代理客户端。\n本地 SOCKS5 端口供其他代理软件接力使用。\n\nhttps://github.com/xiaoxinmm/Zray-for-Android")
+                Text("v1.0.2\n\n轻量加密代理客户端。\n本地 SOCKS5 端口供其他代理软件接力使用。\n\nhttps://github.com/xiaoxinmm/Zray-for-Android")
             },
             confirmButton = {
                 TextButton(onClick = { showAbout = false }) { Text("确定") }
