@@ -106,6 +106,7 @@ fun ZrayApp(
     var activeProfileId by remember { mutableStateOf<String?>(null) }
     var debugEnabled by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
 
     val activeProfile = profiles.find { it.id == activeProfileId }
 
@@ -190,15 +191,29 @@ fun ZrayApp(
                                     DebugLog.log("UI", "配置为空，无法启动")
                                     return@HomeScreen
                                 }
-                                // 软加载动画
+                                // 尝试连接
                                 isConnecting = true
-                                DebugLog.log("UI", "连接中: ${activeProfile.name}")
-                                onStartService(config, socksPort)
-                                scope.launch {
-                                    kotlinx.coroutines.delay(1500) // 给核心启动时间
-                                    isConnecting = false
-                                    isConnected = true
-                                    DebugLog.log("UI", "连接完成")
+                                DebugLog.log("UI", "尝试连接: ${activeProfile.name}")
+                                
+                                // 先停止旧的
+                                onStopService()
+                                kotlinx.coroutines.delay(300)
+                                
+                                // 异步启动核心
+                                com.zrayandroid.zray.core.ZrayCoreMock.startAsync(config, socksPort) { success, error ->
+                                    scope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                                        isConnecting = false
+                                        if (success) {
+                                            isConnected = true
+                                            // 也启动前台服务保活
+                                            onStartService(config, socksPort)
+                                            DebugLog.log("UI", "连接成功")
+                                        } else {
+                                            isConnected = false
+                                            errorMessage = error ?: "连接失败"
+                                            DebugLog.log("ERROR", "连接失败: $error")
+                                        }
+                                    }
                                 }
                             }
                         },
@@ -259,5 +274,17 @@ fun ZrayApp(
                 onDismiss = { debugEnabled = false }
             )
         }
+    }
+
+    // 错误弹窗
+    errorMessage?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { errorMessage = null },
+            title = { Text("连接失败") },
+            text = { Text(msg) },
+            confirmButton = {
+                TextButton(onClick = { errorMessage = null }) { Text("确定") }
+            }
+        )
     }
 }

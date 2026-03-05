@@ -56,8 +56,13 @@ class ZrayService : Service() {
 
         scope.launch {
             DebugLog.log("SERVICE", "启动核心, 端口: $socksPort")
-            ZrayCoreMock.start(config, socksPort)
-            DebugLog.log("SERVICE", "核心已启动")
+            ZrayCoreMock.startAsync(config, socksPort) { success, error ->
+                if (success) {
+                    DebugLog.log("SERVICE", "核心启动成功")
+                } else {
+                    DebugLog.log("ERROR", "核心启动失败: $error")
+                }
+            }
         }
 
         return START_STICKY
