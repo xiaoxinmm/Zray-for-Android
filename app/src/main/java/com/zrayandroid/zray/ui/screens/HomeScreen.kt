@@ -29,7 +29,8 @@ fun HomeScreen(
     hasProfile: Boolean,
     activeProfileName: String?,
     onToggle: () -> Unit,
-    socksPort: Int
+    socksPort: Int,
+    latencyMs: Long = -1
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
@@ -224,7 +225,11 @@ fun HomeScreen(
                 modifier = Modifier.weight(1f),
                 icon = Icons.Default.Speed,
                 label = "延迟",
-                value = if (isConnected) "-- ms" else "--",
+                value = if (isConnected) {
+                    if (latencyMs > 0) "${latencyMs} ms"
+                    else if (latencyMs == 0L) "< 1 ms"
+                    else "测量中..."
+                } else "--",
                 color = Color(0xFFFFA726)
             )
             StatCard(

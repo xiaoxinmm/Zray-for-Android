@@ -55,12 +55,16 @@ class ZrayService : Service() {
         }
 
         scope.launch {
-            DebugLog.log("SERVICE", "启动核心, 端口: $socksPort")
-            ZrayCoreMock.startAsync(config, socksPort) { success, error ->
-                if (success) {
-                    DebugLog.log("SERVICE", "核心启动成功")
-                } else {
-                    DebugLog.log("ERROR", "核心启动失败: $error")
+            DebugLog.log("SERVICE", "前台服务启动, 端口: $socksPort")
+            // 核心已在 MainActivity 中启动，这里只做保活
+            // 不再重复调用 startAsync
+            if (ZrayCoreMock.isRunning) {
+                DebugLog.log("SERVICE", "核心已在运行中")
+            } else {
+                DebugLog.log("SERVICE", "核心未运行，启动中...")
+                ZrayCoreMock.startAsync(config, socksPort) { success, error ->
+                    if (success) DebugLog.log("SERVICE", "核心启动成功")
+                    else DebugLog.log("ERROR", "核心启动失败: $error")
                 }
             }
         }

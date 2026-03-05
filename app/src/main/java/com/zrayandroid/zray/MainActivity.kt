@@ -177,6 +177,16 @@ fun ZrayApp(
                 startDestination = Screen.Home.route,
             ) {
                 composable(Screen.Home.route) {
+                    // 每秒刷新延迟
+                    var latency by remember { mutableStateOf(-1L) }
+                    LaunchedEffect(isConnected) {
+                        while (isConnected) {
+                            latency = com.zrayandroid.zray.core.ZrayCoreMock.latencyMs
+                            kotlinx.coroutines.delay(1000)
+                        }
+                        latency = -1L
+                    }
+
                     HomeScreen(
                         isConnected = isConnected,
                         isConnecting = isConnecting,
@@ -226,7 +236,8 @@ fun ZrayApp(
                                 }
                             }
                         },
-                        socksPort = socksPort
+                        socksPort = socksPort,
+                        latencyMs = latency
                     )
                 }
 

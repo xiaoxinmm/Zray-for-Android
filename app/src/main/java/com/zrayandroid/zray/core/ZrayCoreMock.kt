@@ -18,8 +18,13 @@ object ZrayCoreMock {
     var isRunning = false
         private set
 
+    @Volatile
+    var latencyMs: Long = -1
+        private set
+
     private var serverSocket: ServerSocket? = null
     private var listenThread: Thread? = null
+    private var latencyThread: Thread? = null
 
     private var remoteHost = ""
     private var remotePort = 64433
@@ -62,6 +67,9 @@ object ZrayCoreMock {
                 DebugLog.log("CORE", "SOCKS5 监听成功: 127.0.0.1:$socksPort")
                 onResult(true, null)
 
+                // 启动延迟探测
+                startLatencyProbe()
+
                 // 接受连接循环
                 while (isRunning && !Thread.currentThread().isInterrupted) {
                     try {
@@ -88,10 +96,13 @@ object ZrayCoreMock {
         if (!isRunning) return
         DebugLog.log("CORE", "核心停止")
         isRunning = false
+        latencyMs = -1
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
         listenThread?.interrupt()
         listenThread = null
+        latencyThread?.interrupt()
+        latencyThread = null
     }
 
     private fun handleSocks5(client: Socket) {
@@ -181,6 +192,33 @@ object ZrayCoreMock {
             DebugLog.log("ERROR", "SOCKS5: ${e.message}")
         } finally {
             try { client.close() } catch (_: Exception) {}
+        }
+    }
+
+    private fun startLatencyProbe() {
+        latencyThread = thread(name = "zray-latency", isDaemon = true) {
+            while (isRunning) {
+                try {
+                    if (remoteHost.isNotEmpty()) {
+                        val start = System.currentTimeMillis()
+                        val sock = Socket()
+                        sock.connect(InetSocketAddress(remoteHost, remotePort), 5000)
+                        latencyMs = System.currentTimeMillis() - start
+                        sock.close()
+                        DebugLog.log("LATENCY", "${latencyMs}ms → $remoteHost:$remotePort")
+                    } else {
+                        // 无远程服务器时测本地端口响应
+                        val start = System.currentTimeMillis()
+                        val sock = Socket()
+                        sock.connect(InetSocketAddress("127.0.0.1", serverSocket?.localPort ?: 1081), 1000)
+                        latencyMs = System.currentTimeMillis() - start
+                        sock.close()
+                    }
+                } catch (e: Exception) {
+                    latencyMs = -1
+                }
+                try { Thread.sleep(5000) } catch (_: InterruptedException) { break }
+            }
         }
     }
 
