@@ -46,3 +46,4 @@ Zray 加密代理的 Android 客户端。前台保活 + Material Design 3 界面
 ## 协议
 
 MIT
+# v1.1.0
