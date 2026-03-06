@@ -151,13 +151,18 @@ class ZrayVpnService : VpnService() {
                 try {
                     val iter = tcpSessions.entries.iterator()
                     while (iter.hasNext()) {
-                        val (port, session) = iter.next()
+                        val (_, session) = iter.next()
                         try {
                             val data = session.tryRead()
                             if (data != null && data.isNotEmpty()) {
                                 val pkt = buildTcpDataPacket(session, data)
                                 if (pkt != null) synchronized(output) { output.write(pkt); output.flush() }
                             }
+                        } catch (e: java.io.IOException) {
+                            // EBADF / Socket closed / Broken pipe — 远端或本地已关闭，
+                            // 安静清理 Session，无需打印冗余日志
+                            iter.remove()
+                            session.close()
                         } catch (_: Exception) {
                             iter.remove()
                             session.close()
@@ -165,7 +170,13 @@ class ZrayVpnService : VpnService() {
                     }
                     delay(1)
                 } catch (_: CancellationException) { break }
-                catch (e: Exception) { if (running.get()) DebugLog.log("VPN", "回包: ${e.message}") }
+                catch (e: java.io.IOException) {
+                    // TUN fd 已关闭 (VPN 停止中)，安静退出
+                    break
+                }
+                catch (e: Exception) {
+                    if (running.get()) DebugLog.log("VPN", "回包: ${e.message}")
+                }
             }
         }
 
@@ -260,6 +271,11 @@ class ZrayVpnService : VpnService() {
                     if (sa != null) synchronized(out) { out.write(sa); out.flush() }
                     s.serverSeq++
                     DebugLog.log("VPN", "→ $dstIp:$dstPort OK")
+                } catch (e: java.io.IOException) {
+                    // EBADF / Connection reset / Broken pipe — 连接中断，安静清理
+                    tcpSessions.remove(srcPort)
+                    val r2 = buildCtl(s, rst = true, ack = true)
+                    if (r2 != null) try { synchronized(out) { out.write(r2); out.flush() } } catch (_: Exception) {}
                 } catch (e: Exception) {
                     DebugLog.log("VPN", "→ $dstIp:$dstPort 失败: ${e.message}")
                     tcpSessions.remove(srcPort)
@@ -292,8 +308,11 @@ class ZrayVpnService : VpnService() {
     }
 
     /**
-     * 处理所有 UDP 流量（不再限制为 DNS 端口 53）。
-     * 维护 UDP Session 表，复用 DatagramSocket 以提高性能。
+     * 处理 UDP 流量。
+     *
+     * 策略：DNS（端口 53）等非代理端口直接转发；
+     * QUIC/HTTP（端口 443、80）因无法通过 SOCKS5 代理，
+     * 返回 ICMP Port Unreachable 强制 App 回退到 TCP 走代理通道。
      */
     private fun handleUdp(pkt: ByteBuffer, ihl: Int, srcIp: String, dstIp: String, out: FileOutputStream) {
         if (pkt.limit() < ihl + 8) return
@@ -303,6 +322,17 @@ class ZrayVpnService : VpnService() {
         val payStart = ihl + 8
         val payLen = udpLen - 8
         if (payLen <= 0) return
+
+        // 对 QUIC (UDP 443) 和 HTTP (UDP 80) 返回 ICMP Port Unreachable，
+        // 强制 App 立即回退到 TCP 通过 SOCKS5 代理出去
+        if (dstPort == 443 || dstPort == 80) {
+            val icmp = buildIcmpPortUnreachable(pkt, ihl, dstIp, srcIp)
+            if (icmp != null) {
+                try { synchronized(out) { out.write(icmp); out.flush() } } catch (_: Exception) {}
+            }
+            return
+        }
+
         val payload = ByteArray(payLen)
         System.arraycopy(pkt.array(), payStart, payload, 0, payLen)
 
@@ -352,14 +382,18 @@ class ZrayVpnService : VpnService() {
 
         session.lastActiveTime = System.currentTimeMillis()
 
-        // 发送 UDP 数据
-        scope.launch {
-            try {
-                session.socket.send(
-                    DatagramPacket(payload, payload.size, InetAddress.getByName(dstIp), dstPort)
-                )
-            } catch (e: Exception) {
-                DebugLog.log("VPN", "UDP 发送失败 → $dstIp:$dstPort: ${e.message}")
+        // 发送 UDP 数据（检查会话未关闭且 VPN 仍在运行）
+        if (!session.closed && running.get()) {
+            scope.launch {
+                try {
+                    session.socket.send(
+                        DatagramPacket(payload, payload.size, InetAddress.getByName(dstIp), dstPort)
+                    )
+                } catch (_: java.io.IOException) {
+                    // Socket 已关闭 (VPN 停止中)，安静忽略
+                } catch (e: Exception) {
+                    if (running.get()) DebugLog.log("VPN", "UDP发送失败 → $dstIp:$dstPort: ${e.message}")
+                }
             }
         }
     }
@@ -420,6 +454,36 @@ class ZrayVpnService : VpnService() {
         } catch (_: Exception) { return null }
     }
 
+    /**
+     * 构造 ICMP Destination Unreachable / Port Unreachable (Type=3, Code=3) 报文。
+     * 用于拒绝 QUIC (UDP 443) 等无法代理的 UDP 流量，迫使 App 回退到 TCP。
+     * 格式: IP(20) + ICMP(8) + 原始IP头(ihl) + 原始数据前8字节(UDP头)
+     */
+    private fun buildIcmpPortUnreachable(origPkt: ByteBuffer, ihl: Int, newSrcIp: String, newDstIp: String): ByteArray? {
+        try {
+            // ICMP 载荷 = 原始 IP 头 + 原始数据前 8 字节（UDP 头）
+            val quotedLen = minOf(ihl + 8, origPkt.limit())
+            val total = 20 + 8 + quotedLen  // 新IP头 + ICMP头 + 引用数据
+            val p = ByteArray(total)
+            val b = ByteBuffer.wrap(p)
+            // 新 IP 头
+            b.put(0x45.toByte()); b.put(0); b.putShort(total.toShort()); b.putShort(0)
+            b.putShort(0x4000.toShort()); b.put(64.toByte()); b.put(1.toByte()); b.putShort(0)  // proto=1 (ICMP)
+            putIp(b, newSrcIp); putIp(b, newDstIp)
+            val ipCs = checksum(p, 0, 20)
+            p[10] = (ipCs shr 8).toByte(); p[11] = (ipCs and 0xFF).toByte()
+            // ICMP 头: Type=3 (Dest Unreachable), Code=3 (Port Unreachable), Checksum, Unused(4)
+            b.position(20)
+            b.put(3.toByte()); b.put(3.toByte()); b.putShort(0); b.putInt(0) // checksum placeholder + unused
+            // 引用原始 IP 头 + UDP 头前 8 字节
+            System.arraycopy(origPkt.array(), 0, p, 28, quotedLen)
+            // 计算 ICMP 校验和
+            val icmpCs = checksum(p, 20, total - 20)
+            p[22] = (icmpCs shr 8).toByte(); p[23] = (icmpCs and 0xFF).toByte()
+            return p
+        } catch (_: Exception) { return null }
+    }
+
     // ==================== 工具 ====================
 
     private fun ipStr(b: ByteBuffer, off: Int) = "${b.get(off).toInt() and 0xFF}.${b.get(off+1).toInt() and 0xFF}.${b.get(off+2).toInt() and 0xFF}.${b.get(off+3).toInt() and 0xFF}"
@@ -475,8 +539,13 @@ class ZrayVpnService : VpnService() {
         enum class State { SYN_RECEIVED, ESTABLISHED, CLOSED }
 
         fun writeToRemote(data: ByteArray) {
-            try { socket?.getOutputStream()?.apply { write(data); flush() } }
-            catch (_: Exception) {}
+            if (state == State.CLOSED) return
+            try {
+                socket?.getOutputStream()?.apply { write(data); flush() }
+            } catch (_: java.io.IOException) {
+                // EBADF / Socket closed / Broken pipe — 连接已关闭，忽略写入错误
+                state = State.CLOSED
+            } catch (_: Exception) {}
         }
 
         fun tryRead(): ByteArray? {
@@ -488,6 +557,10 @@ class ZrayVpnService : VpnService() {
                 val buf = ByteArray(minOf(avail, 4096))
                 val n = s.getInputStream().read(buf)
                 if (n > 0) buf.copyOf(n) else null
+            } catch (_: java.io.IOException) {
+                // Socket 已关闭或连接重置，标记 Session 结束
+                state = State.CLOSED
+                null
             } catch (_: Exception) { null }
         }
 

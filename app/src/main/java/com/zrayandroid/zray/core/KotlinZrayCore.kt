@@ -267,6 +267,10 @@ class KotlinZrayCore : IZrayCore {
             } finally {
                 TrafficStats.activeConns.decrementAndGet()
             }
+        } catch (e: java.net.SocketException) {
+            // Connection reset / Socket closed — 正常的网络抖动或连接关闭，无需 ERROR 级别
+        } catch (e: java.io.IOException) {
+            // EBADF / Broken pipe / Read timed out — 远端已关闭，安静忽略
         } catch (e: Exception) {
             DebugLog.log("ERROR", "SOCKS5: ${e.message}")
         } finally {
@@ -385,12 +389,19 @@ class KotlinZrayCore : IZrayCore {
     private fun relayWithStats(input: InputStream, output: OutputStream, isUpload: Boolean) {
         val buf = ByteArray(32 * 1024)
         val counter = if (isUpload) TrafficStats.uploadBytes else TrafficStats.downloadBytes
-        while (true) {
-            val n = input.read(buf)
-            if (n < 0) break
-            output.write(buf, 0, n)
-            output.flush()
-            counter.addAndGet(n.toLong())
+        try {
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                output.write(buf, 0, n)
+                output.flush()
+                counter.addAndGet(n.toLong())
+            }
+        } catch (_: java.net.SocketException) {
+            // Connection reset / Socket closed — 远端正常关闭或网络中断，
+            // 视作流结束，无需报错
+        } catch (_: java.io.IOException) {
+            // EBADF / Broken pipe — 连接已由远端关闭，忽略
         }
     }
 
