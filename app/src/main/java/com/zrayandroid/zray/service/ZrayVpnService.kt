@@ -36,6 +36,8 @@ class ZrayVpnService : VpnService() {
         private const val VPN_ROUTE = "0.0.0.0"
         private const val VPN_DNS = "8.8.8.8"
         private const val VPN_MTU = 1500
+        private const val SOCKS5_HANDSHAKE_TIMEOUT = 30000
+        private const val SOCKS5_DATA_POLL_TIMEOUT = 100
         val isRunning = AtomicBoolean(false)
     }
 
@@ -212,7 +214,7 @@ class ZrayVpnService : VpnService() {
                     protect(sock)
                     sock.connect(InetSocketAddress("127.0.0.1", socksPort), 10000)
                     sock.tcpNoDelay = true
-                    sock.soTimeout = 100
+                    sock.soTimeout = SOCKS5_HANDSHAKE_TIMEOUT
                     // SOCKS5 handshake
                     val o = sock.getOutputStream(); val i = sock.getInputStream()
                     o.write(byteArrayOf(5, 1, 0)); o.flush()
@@ -223,6 +225,7 @@ class ZrayVpnService : VpnService() {
                         (dstPort shr 8).toByte(), (dstPort and 0xFF).toByte())); o.flush()
                     val r = ByteArray(10); i.read(r)
                     if (r[1] != 0.toByte()) throw Exception("SOCKS5 refused")
+                    sock.soTimeout = SOCKS5_DATA_POLL_TIMEOUT
                     s.socket = sock
                     s.clientSeq = seq + 1
                     s.state = TcpSession.State.ESTABLISHED
