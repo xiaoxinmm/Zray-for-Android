@@ -103,7 +103,7 @@ object DebugLog {
     private fun rotateFile() {
         try {
             fileWriter?.close()
-        } catch (_: Exception) {}
+        } catch (e: Exception) {}
 
         val dir = logDir ?: return
         currentDate = dateFmt.format(Date())
@@ -116,6 +116,6 @@ object DebugLog {
             dir.listFiles()?.forEach { f ->
                 if (f.lastModified() < cutoff) f.delete()
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {}
     }
 }

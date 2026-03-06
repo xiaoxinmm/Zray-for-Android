@@ -378,7 +378,7 @@ fun ZrayApp(
                                 android.net.Uri.parse(info.htmlUrl)
                             )
                             context.startActivity(intent)
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {}
                     }) { Text("去更新") }
                 },
                 dismissButton = {

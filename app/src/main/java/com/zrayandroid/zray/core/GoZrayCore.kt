@@ -55,7 +55,7 @@ class GoZrayCore(private val context: Context) : IZrayCore {
         if (running || process != null) {
             DebugLog.log("GO-CORE", "清理旧实例")
             stop()
-            try { Thread.sleep(200) } catch (_: Exception) {}
+            try { Thread.sleep(200) } catch (e: Exception) {}
         }
 
         currentSocksPort = socksPort
@@ -166,24 +166,24 @@ class GoZrayCore(private val context: Context) : IZrayCore {
         TrafficStats.reset()
 
         // 发送 SIGTERM 优雅终止
-        process?.let { proc ->
+        val proc = process
+        if (proc != null) {
             try {
                 proc.destroy()
                 DebugLog.log("GO-CORE", "已发送 SIGTERM")
                 // 等待3秒，超时则强杀
                 val waitThread = Thread {
-                    try { proc.waitFor() } catch (_: Exception) {}
+                    try { proc.waitFor() } catch (e: Exception) { /* ignore */ }
                 }
                 waitThread.start()
                 waitThread.join(3000)
-                val stillAlive = waitThread.isAlive
-                if (stillAlive) {
+                if (waitThread.isAlive) {
                     proc.destroyForcibly()
                     DebugLog.log("GO-CORE", "强制 SIGKILL")
                 }
             } catch (e: Exception) {
                 DebugLog.log("ERROR", "停止进程异常: ${e.message}")
-                try { proc.destroyForcibly() } catch (_: Exception) {}
+                try { proc.destroyForcibly() } catch (e2: Exception) { /* ignore */ }
             }
         }
 
@@ -264,7 +264,7 @@ class GoZrayCore(private val context: Context) : IZrayCore {
             } catch (e: Exception) {
                 if (running) DebugLog.log(tag, "流读取结束: ${e.message}")
             } finally {
-                try { reader.close() } catch (_: Exception) {}
+                try { reader.close() } catch (e: Exception) {}
             }
         }
     }
@@ -280,7 +280,7 @@ class GoZrayCore(private val context: Context) : IZrayCore {
                 sock.connect(InetSocketAddress("127.0.0.1", port), 500)
                 sock.close()
                 return true
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 delay(300)
             }
         }
@@ -304,7 +304,7 @@ class GoZrayCore(private val context: Context) : IZrayCore {
                         latencyMs = System.currentTimeMillis() - start
                         DebugLog.log("LATENCY", "${latencyMs}ms → $remoteHost:$remotePort")
                     }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
                     latencyMs = -1
                 }
                 delay(5000)
@@ -319,13 +319,13 @@ class GoZrayCore(private val context: Context) : IZrayCore {
         return try {
             // Android 9+ (API 28+)
             process.javaClass.getMethod("pid").invoke(process) as Long
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             try {
                 // 旧版本反射
                 val field = process.javaClass.getDeclaredField("pid")
                 field.isAccessible = true
                 field.getInt(process).toLong()
-            } catch (_: Exception) { -1L }
+            } catch (e: Exception) { -1L }
         }
     }
 }

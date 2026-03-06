@@ -60,7 +60,7 @@ class KotlinZrayCore : IZrayCore {
         if (running || serverSocket != null) {
             DebugLog.log("KOTLIN-CORE", "清理旧实例")
             stop()
-            try { Thread.sleep(100) } catch (_: Exception) {}
+            try { Thread.sleep(100) } catch (e: Exception) {}
         }
 
         // 解析配置
@@ -110,7 +110,7 @@ class KotlinZrayCore : IZrayCore {
         running = false
         latencyMs = -1
         TrafficStats.reset()
-        try { serverSocket?.close() } catch (_: Exception) {}
+        try { serverSocket?.close() } catch (e: Exception) {}
         serverSocket = null
         latencyThread?.interrupt()
         latencyThread = null
@@ -229,21 +229,21 @@ class KotlinZrayCore : IZrayCore {
             val remoteIn = remote.getInputStream()
             val remoteOut = remote.getOutputStream()
             val t1 = thread(name = "relay-up") {
-                try { relayWithStats(client.getInputStream(), remoteOut, true) } catch (_: Exception) {}
-                try { remote.close() } catch (_: Exception) {}
-                try { client.close() } catch (_: Exception) {}
+                try { relayWithStats(client.getInputStream(), remoteOut, true) } catch (e: Exception) {}
+                try { remote.close() } catch (e: Exception) {}
+                try { client.close() } catch (e: Exception) {}
             }
             val t2 = thread(name = "relay-down") {
-                try { relayWithStats(remoteIn, client.getOutputStream(), false) } catch (_: Exception) {}
-                try { remote.close() } catch (_: Exception) {}
-                try { client.close() } catch (_: Exception) {}
+                try { relayWithStats(remoteIn, client.getOutputStream(), false) } catch (e: Exception) {}
+                try { remote.close() } catch (e: Exception) {}
+                try { client.close() } catch (e: Exception) {}
             }
             t1.join(); t2.join()
             TrafficStats.activeConns.decrementAndGet()
         } catch (e: Exception) {
             DebugLog.log("ERROR", "SOCKS5: ${e.message}")
         } finally {
-            try { client.close() } catch (_: Exception) {}
+            try { client.close() } catch (e: Exception) {}
         }
     }
 
@@ -326,8 +326,8 @@ class KotlinZrayCore : IZrayCore {
                         sock.close()
                         DebugLog.log("LATENCY", "${latencyMs}ms → $remoteHost:$remotePort")
                     }
-                } catch (_: Exception) { latencyMs = -1 }
-                try { Thread.sleep(5000) } catch (_: InterruptedException) { break }
+                } catch (e: Exception) { latencyMs = -1 }
+                try { Thread.sleep(5000) } catch (e: InterruptedException) { break }
             }
         }
     }
