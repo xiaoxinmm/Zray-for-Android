@@ -13,14 +13,17 @@ import com.zrayandroid.zray.MainActivity
 import com.zrayandroid.zray.R
 import com.zrayandroid.zray.core.DebugLog
 import com.zrayandroid.zray.core.ProxyMode
+import kotlinx.coroutines.*
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.concurrent.thread
 
 class ZrayVpnService : VpnService() {
 
@@ -38,15 +41,20 @@ class ZrayVpnService : VpnService() {
         private const val VPN_MTU = 1500
         private const val SOCKS5_HANDSHAKE_TIMEOUT = 30000
         private const val SOCKS5_DATA_POLL_TIMEOUT = 100
+        /** UDP 会话超时（毫秒），超时后自动清理 */
+        private const val UDP_SESSION_TIMEOUT_MS = 120_000L
         val isRunning = AtomicBoolean(false)
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
-    private var workerThread: Thread? = null
     private val running = AtomicBoolean(false)
     private var socksPort = 1081
-    private val sessions = ConcurrentHashMap<Int, TcpSession>()
+    private val tcpSessions = ConcurrentHashMap<Int, TcpSession>()
+    private val udpSessions = ConcurrentHashMap<Long, UdpSession>()
     private var seqCounter = 100000
+
+    // 协程作用域，替代原始 thread
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun onCreate() {
         super.onCreate()
@@ -107,7 +115,7 @@ class ZrayVpnService : VpnService() {
             startForeground(NOTIFICATION_ID, notif)
         }
 
-        workerThread = thread(name = "vpn-worker") { runTunnel() }
+        scope.launch { runTunnel() }
         DebugLog.log("VPN", "VPN 启动成功")
     }
 
@@ -115,11 +123,13 @@ class ZrayVpnService : VpnService() {
         if (!running.getAndSet(false)) return
         DebugLog.log("VPN", "停止 VPN")
         isRunning.set(false)
-        sessions.values.forEach { it.close() }
-        sessions.clear()
+        tcpSessions.values.forEach { it.close() }
+        tcpSessions.clear()
+        udpSessions.values.forEach { it.close() }
+        udpSessions.clear()
         try { vpnInterface?.close() } catch (_: Exception) {}
         vpnInterface = null
-        workerThread?.interrupt()
+        scope.coroutineContext[Job]?.children?.forEach { it.cancel() }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -129,17 +139,17 @@ class ZrayVpnService : VpnService() {
 
     // ==================== TUN 转发 ====================
 
-    private fun runTunnel() {
+    private suspend fun runTunnel() {
         val fd = vpnInterface?.fileDescriptor ?: return
         val input = FileInputStream(fd)
         val output = FileOutputStream(fd)
         val buf = ByteBuffer.allocate(VPN_MTU)
 
-        // 回包线程：从 SOCKS5 读取响应写回 TUN
-        thread(name = "vpn-resp", isDaemon = true) {
-            while (running.get()) {
+        // 回包协程：从 SOCKS5 读取响应写回 TUN
+        scope.launch {
+            while (running.get() && isActive) {
                 try {
-                    val iter = sessions.entries.iterator()
+                    val iter = tcpSessions.entries.iterator()
                     while (iter.hasNext()) {
                         val (port, session) = iter.next()
                         try {
@@ -153,9 +163,25 @@ class ZrayVpnService : VpnService() {
                             session.close()
                         }
                     }
-                    Thread.sleep(1)
-                } catch (_: InterruptedException) { break }
+                    delay(1)
+                } catch (_: CancellationException) { break }
                 catch (e: Exception) { if (running.get()) DebugLog.log("VPN", "回包: ${e.message}") }
+            }
+        }
+
+        // UDP 会话清理协程
+        scope.launch {
+            while (running.get() && isActive) {
+                val now = System.currentTimeMillis()
+                val iter = udpSessions.entries.iterator()
+                while (iter.hasNext()) {
+                    val (_, session) = iter.next()
+                    if (now - session.lastActiveTime > UDP_SESSION_TIMEOUT_MS) {
+                        iter.remove()
+                        session.close()
+                    }
+                }
+                delay(10_000)
             }
         }
 
@@ -201,14 +227,14 @@ class ZrayVpnService : VpnService() {
         val hdrEnd = ihl + doff
         val payloadLen = pkt.limit() - hdrEnd
 
-        if (rst) { sessions.remove(srcPort)?.close(); return }
+        if (rst) { tcpSessions.remove(srcPort)?.close(); return }
 
         if (syn && !ackF) {
             // 新连接
             val s = TcpSession(srcIp, srcPort, dstIp, dstPort, seq, seqCounter)
             seqCounter += 10000
-            sessions[srcPort] = s
-            thread(name = "socks-$srcPort") {
+            tcpSessions[srcPort] = s
+            scope.launch {
                 try {
                     val sock = Socket()
                     protect(sock)
@@ -236,7 +262,7 @@ class ZrayVpnService : VpnService() {
                     DebugLog.log("VPN", "→ $dstIp:$dstPort OK")
                 } catch (e: Exception) {
                     DebugLog.log("VPN", "→ $dstIp:$dstPort 失败: ${e.message}")
-                    sessions.remove(srcPort)
+                    tcpSessions.remove(srcPort)
                     val r2 = buildCtl(s, rst = true, ack = true)
                     if (r2 != null) try { synchronized(out) { out.write(r2); out.flush() } } catch (_: Exception) {}
                 }
@@ -244,14 +270,14 @@ class ZrayVpnService : VpnService() {
             return
         }
 
-        val s = sessions[srcPort] ?: return
+        val s = tcpSessions[srcPort] ?: return
 
         if (fin) {
             s.clientSeq = seq + 1
             val fa = buildCtl(s, fin = true, ack = true)
             if (fa != null) synchronized(out) { out.write(fa); out.flush() }
             s.serverSeq++
-            sessions.remove(srcPort)?.close()
+            tcpSessions.remove(srcPort)?.close()
             return
         }
 
@@ -265,30 +291,67 @@ class ZrayVpnService : VpnService() {
         }
     }
 
+    /**
+     * 处理所有 UDP 流量（不再限制为 DNS 端口 53）。
+     * 维护 UDP Session 表，复用 DatagramSocket 以提高性能。
+     */
     private fun handleUdp(pkt: ByteBuffer, ihl: Int, srcIp: String, dstIp: String, out: FileOutputStream) {
         if (pkt.limit() < ihl + 8) return
         val srcPort = u16(pkt, ihl)
         val dstPort = u16(pkt, ihl + 2)
-        if (dstPort != 53) return
         val udpLen = u16(pkt, ihl + 4)
         val payStart = ihl + 8
         val payLen = udpLen - 8
         if (payLen <= 0) return
-        val query = ByteArray(payLen)
-        System.arraycopy(pkt.array(), payStart, query, 0, payLen)
+        val payload = ByteArray(payLen)
+        System.arraycopy(pkt.array(), payStart, payload, 0, payLen)
 
-        thread(name = "dns") {
+        // 会话 Key：srcPort + dstIp + dstPort 的组合
+        val sessionKey = (srcPort.toLong() shl 32) or ((dstIp.hashCode().toLong() and 0xFFFFFFFFL) xor dstPort.toLong())
+
+        val session = udpSessions.getOrPut(sessionKey) {
+            val ds = DatagramSocket()
+            protect(ds)
+            ds.soTimeout = 5000
+            val newSession = UdpSession(
+                srcIp = srcIp, srcPort = srcPort,
+                dstIp = dstIp, dstPort = dstPort,
+                socket = ds
+            )
+            // 启动回包接收协程
+            scope.launch {
+                val buf = ByteArray(VPN_MTU)
+                val rp = DatagramPacket(buf, buf.size)
+                while (running.get() && isActive && !newSession.closed) {
+                    try {
+                        newSession.socket.receive(rp)
+                        newSession.lastActiveTime = System.currentTimeMillis()
+                        val respData = buf.copyOf(rp.length)
+                        val udpResp = buildUdpPacket(dstIp, srcIp, dstPort, srcPort, respData)
+                        if (udpResp != null) synchronized(out) { out.write(udpResp); out.flush() }
+                    } catch (_: java.net.SocketTimeoutException) {
+                        // 超时不退出，继续等待
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+                udpSessions.remove(sessionKey)
+                newSession.close()
+            }
+            newSession
+        }
+
+        session.lastActiveTime = System.currentTimeMillis()
+
+        // 发送 UDP 数据
+        scope.launch {
             try {
-                val ds = java.net.DatagramSocket()
-                protect(ds)
-                ds.send(java.net.DatagramPacket(query, query.size, java.net.InetAddress.getByName(dstIp), 53))
-                ds.soTimeout = 5000
-                val resp = ByteArray(1500)
-                val rp = java.net.DatagramPacket(resp, resp.size)
-                ds.receive(rp); ds.close()
-                val udpResp = buildUdpPacket(dstIp, srcIp, 53, srcPort, resp.copyOf(rp.length))
-                if (udpResp != null) synchronized(out) { out.write(udpResp); out.flush() }
-            } catch (_: Exception) {}
+                session.socket.send(
+                    DatagramPacket(payload, payload.size, InetAddress.getByName(dstIp), dstPort)
+                )
+            } catch (e: Exception) {
+                DebugLog.log("VPN", "UDP 发送失败 → $dstIp:$dstPort: ${e.message}")
+            }
         }
     }
 
@@ -422,6 +485,24 @@ class ZrayVpnService : VpnService() {
         fun close() {
             state = State.CLOSED
             try { socket?.close() } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * UDP 会话，维护 DatagramSocket 以复用连接。
+     * 支持所有端口的 UDP 流量转发（不仅限 DNS）。
+     */
+    class UdpSession(
+        val srcIp: String, val srcPort: Int,
+        val dstIp: String, val dstPort: Int,
+        val socket: DatagramSocket
+    ) {
+        @Volatile var lastActiveTime = System.currentTimeMillis()
+        @Volatile var closed = false
+
+        fun close() {
+            closed = true
+            try { socket.close() } catch (_: Exception) {}
         }
     }
 }

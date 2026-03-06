@@ -1,5 +1,6 @@
 package com.zrayandroid.zray.core
 
+import kotlinx.coroutines.*
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
@@ -10,8 +11,9 @@ import java.security.SecureRandom
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.TrustManager
+import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
-import kotlin.concurrent.thread
+import java.security.KeyStore
 
 /**
  * Kotlin 原生核心 — 纯 JVM 实现的 Zray 协议客户端。
@@ -19,6 +21,9 @@ import kotlin.concurrent.thread
  * 协议流程: TCP → TLS 握手 → HTTP 伪装 → Zray 头(ver+ts+nonce+hash) → padding → CMD+地址 → relay
  * 优点: 无需 native 二进制，兼容性好，包体积小
  * 缺点: 无 uTLS 指纹伪装（Java SSLSocket 指纹特征明显）
+ *
+ * 并发模型: 使用 Kotlin Coroutines + Dispatchers.IO 替代原始 thread，
+ * 避免高并发场景下线程爆炸 (OOM)。
  */
 class KotlinZrayCore : IZrayCore {
 
@@ -34,7 +39,14 @@ class KotlinZrayCore : IZrayCore {
     @Volatile private var currentSocksPort = 0
 
     private var serverSocket: ServerSocket? = null
-    private var latencyThread: Thread? = null
+    private var latencyJob: Job? = null
+
+    /** 是否允许不安全的 SSL 证书（跳过校验），默认 true 保持向后兼容 */
+    @Volatile
+    var allowInsecureSsl: Boolean = true
+
+    // 协程作用域，用于管理所有并发任务
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private var remoteHost = ""
     private var remotePort = 64433
@@ -47,9 +59,17 @@ class KotlinZrayCore : IZrayCore {
         override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
     })
 
-    private val sslContext: SSLContext by lazy {
-        SSLContext.getInstance("TLS").apply {
-            init(null, trustAllCerts, SecureRandom())
+    /** 根据 allowInsecureSsl 配置动态构建 SSLContext */
+    private fun buildSslContext(): SSLContext {
+        return SSLContext.getInstance("TLS").apply {
+            if (allowInsecureSsl) {
+                init(null, trustAllCerts, SecureRandom())
+            } else {
+                // 使用系统默认的 TrustManager 进行严格证书校验
+                val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+                tmf.init(null as KeyStore?)
+                init(null, tmf.trustManagers, SecureRandom())
+            }
         }
     }
 
@@ -71,9 +91,9 @@ class KotlinZrayCore : IZrayCore {
         if (userHash.length > 16) userHash = userHash.substring(0, 16)
         while (userHash.length < 16) userHash += "\u0000"
 
-        DebugLog.log("KOTLIN-CORE", "远程: $remoteHost:$remotePort")
+        DebugLog.log("KOTLIN-CORE", "远程: $remoteHost:$remotePort, SSL安全模式: ${!allowInsecureSsl}")
 
-        thread(name = "kotlin-core-listen") {
+        scope.launch {
             try {
                 val ss = ServerSocket()
                 ss.reuseAddress = true
@@ -82,15 +102,15 @@ class KotlinZrayCore : IZrayCore {
                 running = true
 
                 DebugLog.log("KOTLIN-CORE", "SOCKS5 监听成功: 127.0.0.1:$socksPort")
-                onResult(true, null)
+                withContext(Dispatchers.Main) { onResult(true, null) }
 
                 startLatencyProbe()
 
                 // accept 循环
-                while (running && !Thread.currentThread().isInterrupted) {
+                while (running && isActive) {
                     try {
                         val client = ss.accept()
-                        thread(name = "kt-conn") { handleSocks5(client) }
+                        scope.launch { handleSocks5(client) }
                     } catch (e: Exception) {
                         if (running) DebugLog.log("KOTLIN-CORE", "accept: ${e.message}")
                     }
@@ -99,7 +119,7 @@ class KotlinZrayCore : IZrayCore {
                 val msg = "端口 $socksPort 启动失败: ${e.message}"
                 DebugLog.log("ERROR", msg)
                 running = false
-                onResult(false, msg)
+                withContext(Dispatchers.Main) { onResult(false, msg) }
             }
         }
     }
@@ -112,8 +132,9 @@ class KotlinZrayCore : IZrayCore {
         TrafficStats.reset()
         try { serverSocket?.close() } catch (e: Exception) {}
         serverSocket = null
-        latencyThread?.interrupt()
-        latencyThread = null
+        latencyJob?.cancel()
+        latencyJob = null
+        scope.coroutineContext[Job]?.children?.forEach { it.cancel() }
     }
 
     override fun isRunning() = running
@@ -152,7 +173,7 @@ class KotlinZrayCore : IZrayCore {
         }
     }
 
-    private fun handleSocks5(client: Socket) {
+    private suspend fun handleSocks5(client: Socket) {
         try {
             client.soTimeout = 30000
             val input = client.getInputStream()
@@ -224,22 +245,26 @@ class KotlinZrayCore : IZrayCore {
             output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
             output.flush()
 
-            // 双向 relay（带流量统计）
+            // 双向 relay（带流量统计），使用协程并发
             TrafficStats.activeConns.incrementAndGet()
             val remoteIn = remote.getInputStream()
             val remoteOut = remote.getOutputStream()
-            val t1 = thread(name = "relay-up") {
-                try { relayWithStats(client.getInputStream(), remoteOut, true) } catch (e: Exception) {}
-                try { remote.close() } catch (e: Exception) {}
-                try { client.close() } catch (e: Exception) {}
+            try {
+                coroutineScope {
+                    launch {
+                        try { relayWithStats(client.getInputStream(), remoteOut, true) } catch (_: Exception) {}
+                        try { remote.close() } catch (_: Exception) {}
+                        try { client.close() } catch (_: Exception) {}
+                    }
+                    launch {
+                        try { relayWithStats(remoteIn, client.getOutputStream(), false) } catch (_: Exception) {}
+                        try { remote.close() } catch (_: Exception) {}
+                        try { client.close() } catch (_: Exception) {}
+                    }
+                }
+            } finally {
+                TrafficStats.activeConns.decrementAndGet()
             }
-            val t2 = thread(name = "relay-down") {
-                try { relayWithStats(remoteIn, client.getOutputStream(), false) } catch (e: Exception) {}
-                try { remote.close() } catch (e: Exception) {}
-                try { client.close() } catch (e: Exception) {}
-            }
-            t1.join(); t2.join()
-            TrafficStats.activeConns.decrementAndGet()
         } catch (e: Exception) {
             DebugLog.log("ERROR", "SOCKS5: ${e.message}")
         } finally {
@@ -251,7 +276,7 @@ class KotlinZrayCore : IZrayCore {
      * Zray 协议隧道: TLS → HTTP伪装 → 协议头 → padding → CMD+地址
      * 支持自动重试（网络中断/RST 场景）
      */
-    private fun connectViaZray(atyp: Byte, rawAddr: ByteArray, targetPort: Int, targetHost: String): Socket? {
+    private suspend fun connectViaZray(atyp: Byte, rawAddr: ByteArray, targetPort: Int, targetHost: String): Socket? {
         val maxRetries = 3
         for (attempt in 1..maxRetries) {
             try {
@@ -271,7 +296,7 @@ class KotlinZrayCore : IZrayCore {
                     return null
                 }
                 // 退避等待
-                try { Thread.sleep((attempt * 500).toLong()) } catch (_: Exception) {}
+                delay((attempt * 500).toLong())
             }
         }
         return null
@@ -282,7 +307,8 @@ class KotlinZrayCore : IZrayCore {
         tcpSocket.connect(InetSocketAddress(remoteHost, remotePort), 10000)
         tcpSocket.tcpNoDelay = true
 
-        val sslSocket = sslContext.socketFactory.createSocket(
+        val sslCtx = buildSslContext()
+        val sslSocket = sslCtx.socketFactory.createSocket(
             tcpSocket, remoteHost, remotePort, true
         ) as SSLSocket
         sslSocket.startHandshake()
@@ -337,8 +363,8 @@ class KotlinZrayCore : IZrayCore {
     }
 
     private fun startLatencyProbe() {
-        latencyThread = thread(name = "kt-latency", isDaemon = true) {
-            while (running) {
+        latencyJob = scope.launch {
+            while (isActive && running) {
                 try {
                     if (remoteHost.isNotEmpty()) {
                         val start = System.currentTimeMillis()
@@ -349,7 +375,7 @@ class KotlinZrayCore : IZrayCore {
                         DebugLog.log("LATENCY", "${latencyMs}ms → $remoteHost:$remotePort")
                     }
                 } catch (e: Exception) { latencyMs = -1 }
-                try { Thread.sleep(5000) } catch (e: InterruptedException) { break }
+                delay(5000)
             }
         }
     }
