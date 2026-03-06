@@ -40,6 +40,14 @@ class KotlinZrayCore : IZrayCore {
     @Volatile private var latencyMs: Long = -1
     @Volatile private var currentSocksPort = 0
 
+    /** 证书错误是否已记录（每次连接会话只记录一次） */
+    @Volatile private var certErrorLogged = false
+
+    /** 运行时错误，供 UI 层轮询展示 */
+    @Volatile
+    var lastError: String? = null
+        private set
+
     private var serverSocket: ServerSocket? = null
     private var latencyJob: Job? = null
 
@@ -136,6 +144,8 @@ class KotlinZrayCore : IZrayCore {
         DebugLog.log("KOTLIN-CORE", "停止")
         running = false
         latencyMs = -1
+        certErrorLogged = false
+        lastError = null
         TrafficStats.reset()
         try { serverSocket?.close() } catch (e: Exception) {}
         serverSocket = null
@@ -293,6 +303,22 @@ class KotlinZrayCore : IZrayCore {
                 return connectViaZrayOnce(atyp, rawAddr, targetPort, targetHost)
             } catch (e: Exception) {
                 val msg = e.message ?: ""
+
+                // 证书校验失败：不可重试，只记录一次，并提示用户
+                val isCertError = e is java.security.cert.CertificateException ||
+                        e.cause is java.security.cert.CertificateException ||
+                        msg.contains("CertPathValidator") ||
+                        msg.contains("Trust anchor")
+                if (isCertError) {
+                    if (!certErrorLogged) {
+                        certErrorLogged = true
+                        val hint = "SSL 证书校验失败: 节点服务器的证书不受信任。\n请在「设置」中开启「允许不安全的 SSL 证书」后重新连接。"
+                        DebugLog.log("ERROR", hint)
+                        lastError = hint
+                    }
+                    return null
+                }
+
                 DebugLog.log("ERROR", "Zray 连接异常 (尝试$attempt/$maxRetries): $msg")
                 // 可重试的错误：连接中断、超时、被拒绝
                 val retryable = msg.contains("ECONNABORTED") ||

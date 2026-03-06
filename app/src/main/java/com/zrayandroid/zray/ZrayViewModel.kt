@@ -151,6 +151,16 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
                     _downloadSpeed.value = TrafficStats.downloadSpeed
                     _totalUpload.value = TrafficStats.uploadBytes.get()
                     _totalDownload.value = TrafficStats.downloadBytes.get()
+
+                    // 轮询核心运行时错误（如 SSL 证书校验失败）
+                    val core = coreManager.getActiveCore()
+                    if (core is KotlinZrayCore) {
+                        core.lastError?.let { err ->
+                            if (_errorMessage.value == null) {
+                                _errorMessage.value = err
+                            }
+                        }
+                    }
                 } else {
                     _latencyMs.value = -1L
                     _uploadSpeed.value = 0L

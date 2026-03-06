@@ -103,16 +103,21 @@ fun HomeScreen(
     val uploadHistory = remember { mutableStateListOf<Long>() }
     val downloadHistory = remember { mutableStateListOf<Long>() }
 
-    LaunchedEffect(uploadSpeed, downloadSpeed) {
-        uploadHistory.add(uploadSpeed)
-        downloadHistory.add(downloadSpeed)
-        if (uploadHistory.size > maxHistory) uploadHistory.removeAt(0)
-        if (downloadHistory.size > maxHistory) downloadHistory.removeAt(0)
-    }
+    // 使用 rememberUpdatedState 确保定时器内总是读到最新值
+    val currentUploadSpeed by rememberUpdatedState(uploadSpeed)
+    val currentDownloadSpeed by rememberUpdatedState(downloadSpeed)
 
-    // 断开时清空历史
-    LaunchedEffect(isConnected) {
-        if (!isConnected) {
+    // 定时采样：每秒添加一个数据点，即使速度值不变也能持续填充图表
+    LaunchedEffect(isConnected, isGoCore) {
+        if (isConnected && !isGoCore) {
+            while (true) {
+                uploadHistory.add(currentUploadSpeed)
+                downloadHistory.add(currentDownloadSpeed)
+                if (uploadHistory.size > maxHistory) uploadHistory.removeAt(0)
+                if (downloadHistory.size > maxHistory) downloadHistory.removeAt(0)
+                kotlinx.coroutines.delay(1000)
+            }
+        } else {
             uploadHistory.clear()
             downloadHistory.clear()
         }
