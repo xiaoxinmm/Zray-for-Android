@@ -32,7 +32,6 @@ class GoZrayCore(private val context: Context) : IZrayCore {
     private var process: Process? = null
     private var latencyJob: Job? = null
     private var stdoutJob: Job? = null
-    private var stderrJob: Job? = null
 
     // 协程作用域，用于管理子进程 I/O 读取
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -60,36 +59,16 @@ class GoZrayCore(private val context: Context) : IZrayCore {
 
         currentSocksPort = socksPort
 
-        // 1. 检查二进制文件是否存在
-        if (!binaryFile.exists()) {
-            val msg = "Go 核心二进制文件不存在: ${binaryFile.absolutePath}\n" +
-                    "请将 zray-client (arm64) 放入应用 files 目录"
+        // 1. 从 assets 解压核心二进制（自动校验 MD5 + chmod）
+        val binary = AssetExtractor.ensureExtracted(context)
+        if (binary == null || !binary.exists()) {
+            val msg = "Go 核心不可用：assets 中未内置或解压失败"
             DebugLog.log("ERROR", msg)
             onResult(false, msg)
             return
         }
 
-        // 2. 赋予执行权限
-        try {
-            if (!binaryFile.canExecute()) {
-                val chmod = Runtime.getRuntime().exec(arrayOf("chmod", "755", binaryFile.absolutePath))
-                val exitCode = chmod.waitFor()
-                if (exitCode != 0) {
-                    val msg = "chmod 失败, exitCode=$exitCode"
-                    DebugLog.log("ERROR", msg)
-                    onResult(false, msg)
-                    return
-                }
-                DebugLog.log("GO-CORE", "chmod 755 成功")
-            }
-        } catch (e: Exception) {
-            val msg = "权限设置失败: ${e.message}"
-            DebugLog.log("ERROR", msg)
-            onResult(false, msg)
-            return
-        }
-
-        // 3. 生成配置文件
+        // 2. 生成配置文件
         try {
             val configJson = generateConfig(config, socksPort)
             configFile.writeText(configJson)
@@ -101,12 +80,12 @@ class GoZrayCore(private val context: Context) : IZrayCore {
             return
         }
 
-        // 4. 启动子进程
+        // 3. 启动子进程
         scope.launch {
             try {
-                val pb = ProcessBuilder(binaryFile.absolutePath)
-                    .directory(context.filesDir) // 工作目录设为 filesDir（config.json 在这里）
-                    .redirectErrorStream(false)   // stdout/stderr 分开读取
+                val pb = ProcessBuilder(binary.absolutePath, "-c", configFile.absolutePath)
+                    .directory(context.filesDir)
+                    .redirectErrorStream(true)    // stderr 合并到 stdout，统一读取
 
                 // 设置环境变量（如需要）
                 pb.environment()["HOME"] = context.filesDir.absolutePath
@@ -117,11 +96,10 @@ class GoZrayCore(private val context: Context) : IZrayCore {
 
                 DebugLog.log("GO-CORE", "子进程已启动, PID=${getPid(proc)}")
 
-                // 5. 启动 stdout/stderr 协程读取
-                stdoutJob = scope.launch { readStream(proc.inputStream.bufferedReader(), "GO-OUT") }
-                stderrJob = scope.launch { readStream(proc.errorStream.bufferedReader(), "GO-ERR") }
+                // 4. 启动 stdout 读取（stderr 已合并）
+                stdoutJob = scope.launch { readStream(proc.inputStream.bufferedReader(), "GO-CORE") }
 
-                // 6. 等待端口就绪（最多 10 秒）
+                // 5. 等待端口就绪（最多 10 秒）
                 val portReady = waitForPort(socksPort, timeoutMs = 10000)
                 if (portReady) {
                     DebugLog.log("GO-CORE", "端口 $socksPort 就绪")
@@ -144,7 +122,7 @@ class GoZrayCore(private val context: Context) : IZrayCore {
                     withContext(Dispatchers.Main) { onResult(true, null) }
                 }
 
-                // 7. 监控进程退出
+                // 6. 监控进程退出
                 val exitCode = proc.waitFor()
                 running = false
                 DebugLog.log("GO-CORE", "子进程退出, exitCode=$exitCode")
@@ -190,7 +168,6 @@ class GoZrayCore(private val context: Context) : IZrayCore {
         process = null
         latencyJob?.cancel()
         stdoutJob?.cancel()
-        stderrJob?.cancel()
     }
 
     override fun isRunning() = running
@@ -209,7 +186,10 @@ class GoZrayCore(private val context: Context) : IZrayCore {
     /**
      * 检查 Go 二进制文件是否已就绪
      */
-    fun isBinaryAvailable(): Boolean = binaryFile.exists() && binaryFile.canExecute()
+    fun isBinaryAvailable(): Boolean {
+        // 优先检查已解压的文件，其次检查 assets 中是否内置
+        return (binaryFile.exists() && binaryFile.canExecute()) || AssetExtractor.hasAsset(context)
+    }
 
     /**
      * 获取二进制文件路径（供外部复制文件用）
