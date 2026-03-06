@@ -12,7 +12,6 @@ import androidx.core.app.NotificationCompat
 import com.zrayandroid.zray.MainActivity
 import com.zrayandroid.zray.R
 import com.zrayandroid.zray.core.DebugLog
-import com.zrayandroid.zray.core.PerAppMode
 import com.zrayandroid.zray.core.ProxyMode
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -30,7 +29,6 @@ class ZrayVpnService : VpnService() {
         const val ACTION_STOP = "com.zrayandroid.zray.VPN_STOP"
         const val EXTRA_SOCKS_PORT = "socks_port"
         const val EXTRA_MODE = "proxy_mode"
-        const val EXTRA_PER_APP_MODE = "per_app_mode"
         const val EXTRA_SELECTED_APPS = "selected_apps"
         const val CHANNEL_ID = "zray_vpn"
         const val NOTIFICATION_ID = 2
@@ -59,16 +57,15 @@ class ZrayVpnService : VpnService() {
             ACTION_STOP -> { stopVpn(); return START_NOT_STICKY }
             ACTION_START -> {
                 socksPort = intent.getIntExtra(EXTRA_SOCKS_PORT, 1081)
-                val mode = try { ProxyMode.valueOf(intent.getStringExtra(EXTRA_MODE) ?: "") } catch (_: Exception) { ProxyMode.VPN_GLOBAL }
-                val perAppMode = try { PerAppMode.valueOf(intent.getStringExtra(EXTRA_PER_APP_MODE) ?: "") } catch (_: Exception) { PerAppMode.WHITELIST }
+                val mode = try { ProxyMode.valueOf(intent.getStringExtra(EXTRA_MODE) ?: "") } catch (_: Exception) { ProxyMode.VPN_PER_APP }
                 val apps = intent.getStringArrayListExtra(EXTRA_SELECTED_APPS)?.toSet() ?: emptySet()
-                startVpn(mode, perAppMode, apps)
+                startVpn(mode, apps)
             }
         }
         return START_STICKY
     }
 
-    private fun startVpn(mode: ProxyMode, perAppMode: PerAppMode, selectedApps: Set<String>) {
+    private fun startVpn(mode: ProxyMode, selectedApps: Set<String>) {
         if (running.get()) return
         DebugLog.log("VPN", "启动 VPN: mode=$mode, port=$socksPort, apps=${selectedApps.size}")
 
@@ -80,20 +77,10 @@ class ZrayVpnService : VpnService() {
             .addDnsServer(VPN_DNS)
             .addDnsServer("8.8.4.4")
 
-        // 分应用
+        // 分应用：选中的应用走代理
         if (mode == ProxyMode.VPN_PER_APP && selectedApps.isNotEmpty()) {
-            when (perAppMode) {
-                PerAppMode.WHITELIST -> {
-                    for (pkg in selectedApps) {
-                        try { builder.addAllowedApplication(pkg) } catch (_: Exception) {}
-                    }
-                }
-                PerAppMode.BLACKLIST -> {
-                    try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
-                    for (pkg in selectedApps) {
-                        try { builder.addDisallowedApplication(pkg) } catch (_: Exception) {}
-                    }
-                }
+            for (pkg in selectedApps) {
+                try { builder.addAllowedApplication(pkg) } catch (_: Exception) {}
             }
         } else {
             try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}

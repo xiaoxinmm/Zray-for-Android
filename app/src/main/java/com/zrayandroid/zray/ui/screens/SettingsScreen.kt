@@ -33,12 +33,6 @@ fun SettingsScreen(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(
-            "设置",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
         // ===== 代理核心选择 =====
         Card(
             shape = RoundedCornerShape(16.dp),

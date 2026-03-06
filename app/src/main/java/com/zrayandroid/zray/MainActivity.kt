@@ -30,6 +30,7 @@ import com.zrayandroid.zray.core.DebugLog
 import com.zrayandroid.zray.core.ProfileStore
 import com.zrayandroid.zray.navigation.Screen
 import com.zrayandroid.zray.navigation.screens
+import com.zrayandroid.zray.navigation.screenTitle
 import com.zrayandroid.zray.service.ZrayService
 import com.zrayandroid.zray.ui.components.DebugOverlay
 import com.zrayandroid.zray.ui.screens.*
@@ -199,27 +200,49 @@ fun ZrayApp(
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        topBar = {
+            val title = screenTitle(currentRoute)
+            val isAppList = currentRoute == Screen.AppList.route
+            @OptIn(ExperimentalMaterial3Api::class)
+            CenterAlignedTopAppBar(
+                title = { Text(title) },
+                navigationIcon = {
+                    if (isAppList) {
+                        IconButton(onClick = { navController.popBackStack() }) {
+                            Icon(
+                                androidx.compose.material.icons.Icons.Default.ArrowBack,
+                                contentDescription = "返回"
+                            )
+                        }
+                    }
+                },
+                windowInsets = WindowInsets.statusBars
+            )
+        },
         bottomBar = {
-            NavigationBar(
-                modifier = Modifier.windowInsetsPadding(
-                    WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)
-                )
-            ) {
-                screens.forEach { screen ->
-                    NavigationBarItem(
-                        icon = { Icon(screen.icon, contentDescription = screen.label) },
-                        label = { Text(screen.label) },
-                        selected = currentRoute == screen.route,
-                        onClick = {
-                            if (currentRoute != screen.route) {
-                                navController.navigate(screen.route) {
-                                    popUpTo(Screen.Home.route) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
+            // AppList 页面不显示底部导航
+            if (currentRoute != Screen.AppList.route) {
+                NavigationBar(
+                    modifier = Modifier.windowInsetsPadding(
+                        WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)
+                    )
+                ) {
+                    screens.forEach { screen ->
+                        NavigationBarItem(
+                            icon = { Icon(screen.icon, contentDescription = screen.label) },
+                            label = { Text(screen.label) },
+                            selected = currentRoute == screen.route,
+                            onClick = {
+                                if (currentRoute != screen.route) {
+                                    navController.navigate(screen.route) {
+                                        popUpTo(Screen.Home.route) { saveState = true }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
                                 }
                             }
-                        }
-                    )
+                        )
+                    }
                 }
             }
         },
@@ -229,7 +252,6 @@ fun ZrayApp(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .windowInsetsPadding(WindowInsets.statusBars)
         ) {
             NavHost(
                 navController = navController,
@@ -357,8 +379,26 @@ fun ZrayApp(
                                 com.zrayandroid.zray.core.RoutingStore.save(context, newConfig)
                             }
                         },
+                        isVpnRunning = isVpnRunning,
+                        onNavigateToAppList = {
+                            navController.navigate(Screen.AppList.route) {
+                                launchSingleTop = true
+                            }
+                        }
+                    )
+                }
+
+                composable(Screen.AppList.route) {
+                    AppListScreen(
                         installedApps = installedApps,
-                        isVpnRunning = isVpnRunning
+                        selectedApps = routingConfig.selectedApps,
+                        isVpnRunning = isVpnRunning,
+                        onSelectionChange = { newSet ->
+                            routingConfig = routingConfig.copy(selectedApps = newSet)
+                            scope.launch {
+                                com.zrayandroid.zray.core.RoutingStore.save(context, routingConfig)
+                            }
+                        }
                     )
                 }
 
@@ -459,7 +499,6 @@ private fun startVpn(context: android.content.Context, socksPort: Int, config: c
         action = com.zrayandroid.zray.service.ZrayVpnService.ACTION_START
         putExtra(com.zrayandroid.zray.service.ZrayVpnService.EXTRA_SOCKS_PORT, socksPort)
         putExtra(com.zrayandroid.zray.service.ZrayVpnService.EXTRA_MODE, config.mode.name)
-        putExtra(com.zrayandroid.zray.service.ZrayVpnService.EXTRA_PER_APP_MODE, config.perAppMode.name)
         putStringArrayListExtra(com.zrayandroid.zray.service.ZrayVpnService.EXTRA_SELECTED_APPS,
             ArrayList(config.selectedApps))
     }
