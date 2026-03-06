@@ -120,6 +120,7 @@ object ZrayCoreMock {
         DebugLog.log("CORE", "核心停止")
         isRunning = false
         latencyMs = -1
+        TrafficStats.reset()
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
         latencyThread?.interrupt()
@@ -220,21 +221,23 @@ object ZrayCoreMock {
             output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
             output.flush()
 
-            // 双向 relay
+            // 双向 relay（带流量统计）
+            TrafficStats.activeConns.incrementAndGet()
             val remoteIn = remote.getInputStream()
             val remoteOut = remote.getOutputStream()
             val t1 = thread(name = "relay-up") {
-                try { relay(client.getInputStream(), remoteOut) } catch (_: Exception) {}
+                try { relayWithStats(client.getInputStream(), remoteOut, isUpload = true) } catch (_: Exception) {}
                 try { remote.close() } catch (_: Exception) {}
                 try { client.close() } catch (_: Exception) {}
             }
             val t2 = thread(name = "relay-down") {
-                try { relay(remoteIn, client.getOutputStream()) } catch (_: Exception) {}
+                try { relayWithStats(remoteIn, client.getOutputStream(), isUpload = false) } catch (_: Exception) {}
                 try { remote.close() } catch (_: Exception) {}
                 try { client.close() } catch (_: Exception) {}
             }
             t1.join()
             t2.join()
+            TrafficStats.activeConns.decrementAndGet()
         } catch (e: Exception) {
             DebugLog.log("ERROR", "SOCKS5: ${e.message}")
         } finally {
@@ -361,6 +364,18 @@ object ZrayCoreMock {
                 }
                 try { Thread.sleep(5000) } catch (_: InterruptedException) { break }
             }
+        }
+    }
+
+    private fun relayWithStats(input: InputStream, output: OutputStream, isUpload: Boolean) {
+        val buf = ByteArray(32 * 1024)
+        val counter = if (isUpload) TrafficStats.uploadBytes else TrafficStats.downloadBytes
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            output.write(buf, 0, n)
+            output.flush()
+            counter.addAndGet(n.toLong())
         }
     }
 

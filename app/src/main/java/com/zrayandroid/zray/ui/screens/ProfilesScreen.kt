@@ -235,17 +235,28 @@ private fun AddProfileDialog(
                         )
                         onConfirm(p)
                     } else if (mode == "link" && linkInput.trim().startsWith("ZA://", ignoreCase = true)) {
-                        // TODO: 解密ZA链接获取server/port/hash，目前先存原始链接
-                        val p = Profile(
-                            id = java.util.UUID.randomUUID().toString(),
-                            name = "ZA 节点 ${System.currentTimeMillis() % 1000}",
-                            link = linkInput.trim(),
-                            // 后续ZA解密后填充这些字段
-                            server = "",
-                            port = 64433,
-                            userHash = ""
-                        )
-                        onConfirm(p)
+                        try {
+                            val cfg = com.zrayandroid.zray.core.ZALinkParser.parse(linkInput.trim())
+                            val p = Profile(
+                                id = java.util.UUID.randomUUID().toString(),
+                                name = "${cfg.host}:${cfg.port}",
+                                link = linkInput.trim(),
+                                server = cfg.host,
+                                port = cfg.port,
+                                userHash = cfg.userHash
+                            )
+                            com.zrayandroid.zray.core.DebugLog.log("PROFILE", "ZA 链接解析成功: ${cfg.host}:${cfg.port}")
+                            onConfirm(p)
+                        } catch (e: Exception) {
+                            com.zrayandroid.zray.core.DebugLog.log("ERROR", "ZA 链接解析失败: ${e.message}")
+                            // 解析失败存原始链接
+                            val p = Profile(
+                                id = java.util.UUID.randomUUID().toString(),
+                                name = "ZA 节点 ${System.currentTimeMillis() % 1000}",
+                                link = linkInput.trim()
+                            )
+                            onConfirm(p)
+                        }
                     }
                 },
                 enabled = if (mode == "manual") server.isNotBlank()

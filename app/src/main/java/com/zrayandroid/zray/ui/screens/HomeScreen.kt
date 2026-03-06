@@ -30,7 +30,11 @@ fun HomeScreen(
     activeProfileName: String?,
     onToggle: () -> Unit,
     socksPort: Int,
-    latencyMs: Long = -1
+    latencyMs: Long = -1,
+    uploadSpeed: Long = 0,
+    downloadSpeed: Long = 0,
+    totalUpload: Long = 0,
+    totalDownload: Long = 0
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
@@ -203,14 +207,14 @@ fun HomeScreen(
                 modifier = Modifier.weight(1f),
                 icon = Icons.Default.ArrowUpward,
                 label = "上传",
-                value = if (isConnected) "0 B/s" else "--",
+                value = if (isConnected) com.zrayandroid.zray.core.TrafficStats.formatSpeed(uploadSpeed) else "--",
                 color = Color(0xFF42A5F5)
             )
             StatCard(
                 modifier = Modifier.weight(1f),
                 icon = Icons.Default.ArrowDownward,
                 label = "下载",
-                value = if (isConnected) "0 B/s" else "--",
+                value = if (isConnected) com.zrayandroid.zray.core.TrafficStats.formatSpeed(downloadSpeed) else "--",
                 color = Color(0xFF66BB6A)
             )
         }

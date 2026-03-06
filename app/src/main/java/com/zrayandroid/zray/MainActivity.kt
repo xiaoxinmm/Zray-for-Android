@@ -16,6 +16,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -114,6 +119,18 @@ fun ZrayApp(
     var debugEnabled by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var updateInfo by remember { mutableStateOf<com.zrayandroid.zray.core.UpdateChecker.UpdateInfo?>(null) }
+    var showUpdateDialog by remember { mutableStateOf(false) }
+
+    // 启动时检查更新
+    LaunchedEffect(Unit) {
+        com.zrayandroid.zray.core.UpdateChecker.checkAsync(APP_VERSION) { info ->
+            if (info != null) {
+                updateInfo = info
+                showUpdateDialog = true
+            }
+        }
+    }
 
     val activeProfile = profiles.find { it.id == activeProfileId }
 
@@ -177,14 +194,25 @@ fun ZrayApp(
                 startDestination = Screen.Home.route,
             ) {
                 composable(Screen.Home.route) {
-                    // 每秒刷新延迟
+                    // 每秒刷新延迟+流量
                     var latency by remember { mutableStateOf(-1L) }
+                    var upSpeed by remember { mutableStateOf(0L) }
+                    var downSpeed by remember { mutableStateOf(0L) }
+                    var totalUp by remember { mutableStateOf(0L) }
+                    var totalDown by remember { mutableStateOf(0L) }
                     LaunchedEffect(isConnected) {
                         while (isConnected) {
                             latency = com.zrayandroid.zray.core.ZrayCoreMock.latencyMs
+                            com.zrayandroid.zray.core.TrafficStats.tick()
+                            upSpeed = com.zrayandroid.zray.core.TrafficStats.uploadSpeed
+                            downSpeed = com.zrayandroid.zray.core.TrafficStats.downloadSpeed
+                            totalUp = com.zrayandroid.zray.core.TrafficStats.uploadBytes.get()
+                            totalDown = com.zrayandroid.zray.core.TrafficStats.downloadBytes.get()
                             kotlinx.coroutines.delay(1000)
                         }
                         latency = -1L
+                        upSpeed = 0L
+                        downSpeed = 0L
                     }
 
                     HomeScreen(
@@ -238,7 +266,11 @@ fun ZrayApp(
                             }
                         },
                         socksPort = socksPort,
-                        latencyMs = latency
+                        latencyMs = latency,
+                        uploadSpeed = upSpeed,
+                        downloadSpeed = downSpeed,
+                        totalUpload = totalUp,
+                        totalDownload = totalDown
                     )
                 }
 
@@ -307,5 +339,45 @@ fun ZrayApp(
                 TextButton(onClick = { errorMessage = null }) { Text("确定") }
             }
         )
+    }
+
+    // 更新弹窗
+    if (showUpdateDialog) {
+        updateInfo?.let { info ->
+            AlertDialog(
+                onDismissRequest = { showUpdateDialog = false },
+                title = { Text("发现新版本 v${info.version}") },
+                text = {
+                    Column {
+                        Text("当前版本: v$APP_VERSION")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        if (info.releaseNotes.isNotBlank()) {
+                            Text(
+                                info.releaseNotes.take(300),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showUpdateDialog = false
+                        // 打开下载页面
+                        try {
+                            val intent = android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse(info.htmlUrl)
+                            )
+                            context.startActivity(intent)
+                        } catch (_: Exception) {}
+                    }) { Text("去更新") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showUpdateDialog = false }) { Text("以后再说") }
+                },
+                shape = RoundedCornerShape(20.dp)
+            )
+        }
     }
 }
