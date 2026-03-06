@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zrayandroid.zray.core.CoreType
+import kotlinx.coroutines.delay
 
 @Composable
 fun HomeScreen(
@@ -108,6 +109,7 @@ fun HomeScreen(
     val currentDownloadSpeed by rememberUpdatedState(downloadSpeed)
 
     // 定时采样：每秒添加一个数据点，即使速度值不变也能持续填充图表
+    // （LaunchedEffect 在 isConnected/isGoCore 变化时自动取消并重启）
     LaunchedEffect(isConnected, isGoCore) {
         if (isConnected && !isGoCore) {
             while (true) {
@@ -115,7 +117,7 @@ fun HomeScreen(
                 downloadHistory.add(currentDownloadSpeed)
                 if (uploadHistory.size > maxHistory) uploadHistory.removeAt(0)
                 if (downloadHistory.size > maxHistory) downloadHistory.removeAt(0)
-                kotlinx.coroutines.delay(1000)
+                delay(1000)
             }
         } else {
             uploadHistory.clear()
