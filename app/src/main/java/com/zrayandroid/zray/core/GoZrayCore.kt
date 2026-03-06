@@ -209,7 +209,7 @@ class GoZrayCore(private val context: Context) : IZrayCore {
                 return """
                 {
                     "smart_port": "127.0.0.1:$socksPort",
-                    "global_port": "127.0.0.1:$socksPort",
+                    "global_port": "127.0.0.1:${socksPort + 1}",
                     "remote_host": "$remoteHost",
                     "remote_port": $remotePort,
                     "user_hash": "$userHash",
