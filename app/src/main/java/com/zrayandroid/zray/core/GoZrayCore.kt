@@ -83,9 +83,9 @@ class GoZrayCore(private val context: Context) : IZrayCore {
         // 3. 启动子进程
         scope.launch {
             try {
-                val pb = ProcessBuilder(binaryFile.absolutePath, "-c", configFile.absolutePath)
-                    .directory(context.filesDir)
-                    .redirectErrorStream(true)    // stderr 合并到 stdout，统一读取
+                val pb = ProcessBuilder(binaryFile.absolutePath)
+                    .directory(context.filesDir)      // 工作目录 = filesDir，Go 会读这里的 config.json
+                    .redirectErrorStream(true)
 
                 // 设置环境变量（如需要）
                 pb.environment()["HOME"] = context.filesDir.absolutePath
