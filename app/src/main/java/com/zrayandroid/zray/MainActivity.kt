@@ -258,7 +258,8 @@ fun ZrayApp(
                         uploadSpeed = uploadSpeed,
                         downloadSpeed = downloadSpeed,
                         totalUpload = totalUpload,
-                        totalDownload = totalDownload
+                        totalDownload = totalDownload,
+                        selectedCoreType = selectedCoreType
                     )
                 }
 
