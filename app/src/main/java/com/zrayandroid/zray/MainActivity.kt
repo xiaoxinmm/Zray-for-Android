@@ -44,6 +44,31 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { /* granted or not */ }
 
+    // VPN 授权
+    private val vpnPermission = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == RESULT_OK) {
+            DebugLog.log("VPN", "VPN 授权通过")
+            pendingVpnStart?.invoke()
+        } else {
+            DebugLog.log("VPN", "VPN 授权被拒绝")
+        }
+        pendingVpnStart = null
+    }
+
+    var pendingVpnStart: (() -> Unit)? = null
+
+    fun prepareVpn(onReady: () -> Unit) {
+        val intent = android.net.VpnService.prepare(this)
+        if (intent != null) {
+            pendingVpnStart = onReady
+            vpnPermission.launch(intent)
+        } else {
+            onReady()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -70,6 +95,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             ZrayTheme {
                 ZrayApp(
+                    activity = this,
                     onStartService = { config, port -> startZrayService(config, port) },
                     onStopService = { stopZrayService() }
                 )
@@ -102,6 +128,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun ZrayApp(
+    activity: MainActivity,
     onStartService: (String, Int) -> Unit,
     onStopService: () -> Unit
 ) {
@@ -122,6 +149,11 @@ fun ZrayApp(
     var updateInfo by remember { mutableStateOf<com.zrayandroid.zray.core.UpdateChecker.UpdateInfo?>(null) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     var selectedCoreType by remember { mutableStateOf(com.zrayandroid.zray.core.CoreType.KOTLIN_CORE) }
+
+    // 路由配置
+    var routingConfig by remember { mutableStateOf(com.zrayandroid.zray.core.RoutingConfig()) }
+    var installedApps by remember { mutableStateOf(listOf<com.zrayandroid.zray.core.AppInfo>()) }
+    var isVpnRunning by remember { mutableStateOf(false) }
 
     // 核心管理器（单例，跟随 Composable 生命周期）
     val coreManager = remember { com.zrayandroid.zray.core.ZrayCoreManager(context) }
@@ -147,6 +179,12 @@ fun ZrayApp(
         socksPort = savedPort
         loaded = true
         DebugLog.log("APP", "本地配置加载完成: ${savedProfiles.size} 个节点")
+    }
+
+    // 加载路由配置和应用列表
+    LaunchedEffect(Unit) {
+        routingConfig = com.zrayandroid.zray.core.RoutingStore.load(context)
+        installedApps = com.zrayandroid.zray.core.RoutingStore.getInstalledApps(context)
     }
 
     // 配置变更时自动保存
@@ -229,6 +267,11 @@ fun ZrayApp(
                             if (isConnected) {
                                 coreManager.stop()
                                 onStopService()
+                                // 停止 VPN
+                                if (isVpnRunning) {
+                                    stopVpn(context)
+                                    isVpnRunning = false
+                                }
                                 isConnected = false
                                 DebugLog.log("UI", "用户点击断开")
                             } else if (activeProfile != null) {
@@ -250,7 +293,14 @@ fun ZrayApp(
                                     if (success) {
                                         isConnected = true
                                         onStartService(config, socksPort)
-                                        DebugLog.log("UI", "连接成功")
+                                // 根据路由模式启动 VPN
+                                        if (routingConfig.mode != com.zrayandroid.zray.core.ProxyMode.SOCKS5_ONLY) {
+                                            activity.prepareVpn {
+                                                startVpn(context, socksPort, routingConfig)
+                                                isVpnRunning = true
+                                            }
+                                        }
+                                        DebugLog.log("UI", "连接成功 (${routingConfig.mode.displayName})")
                                     } else {
                                         isConnected = false
                                         errorMessage = error ?: "连接失败"
@@ -295,6 +345,20 @@ fun ZrayApp(
                             DebugLog.log("PROFILE", "删除: ${p?.name}")
                             saveAll()
                         }
+                    )
+                }
+
+                composable(Screen.Routing.route) {
+                    RoutingScreen(
+                        config = routingConfig,
+                        onConfigChange = { newConfig ->
+                            routingConfig = newConfig
+                            scope.launch {
+                                com.zrayandroid.zray.core.RoutingStore.save(context, newConfig)
+                            }
+                        },
+                        installedApps = installedApps,
+                        isVpnRunning = isVpnRunning
                     )
                 }
 
@@ -388,4 +452,27 @@ fun ZrayApp(
             )
         }
     }
+}
+
+private fun startVpn(context: android.content.Context, socksPort: Int, config: com.zrayandroid.zray.core.RoutingConfig) {
+    val intent = android.content.Intent(context, com.zrayandroid.zray.service.ZrayVpnService::class.java).apply {
+        action = com.zrayandroid.zray.service.ZrayVpnService.ACTION_START
+        putExtra(com.zrayandroid.zray.service.ZrayVpnService.EXTRA_SOCKS_PORT, socksPort)
+        putExtra(com.zrayandroid.zray.service.ZrayVpnService.EXTRA_MODE, config.mode.name)
+        putExtra(com.zrayandroid.zray.service.ZrayVpnService.EXTRA_PER_APP_MODE, config.perAppMode.name)
+        putStringArrayListExtra(com.zrayandroid.zray.service.ZrayVpnService.EXTRA_SELECTED_APPS,
+            ArrayList(config.selectedApps))
+    }
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+        context.startForegroundService(intent)
+    } else {
+        context.startService(intent)
+    }
+}
+
+private fun stopVpn(context: android.content.Context) {
+    val intent = android.content.Intent(context, com.zrayandroid.zray.service.ZrayVpnService::class.java).apply {
+        action = com.zrayandroid.zray.service.ZrayVpnService.ACTION_STOP
+    }
+    context.startService(intent)
 }
