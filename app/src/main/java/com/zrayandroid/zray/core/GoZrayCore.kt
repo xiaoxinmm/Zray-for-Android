@@ -311,8 +311,13 @@ class GoZrayCore(private val context: Context) : IZrayCore {
                 while (isActive && running && proc.isAlive) {
                     delay(3000)
                     // 检查 Android 进程是否还存在（通过 /proc/[pid] 目录判断）
-                    val procDir = java.io.File("/proc/$myPid")
-                    if (!procDir.exists()) {
+                    // 使用 try-catch 防止 SELinux 策略导致的文件系统访问限制
+                    val processAlive = try {
+                        java.io.File("/proc/$myPid").exists()
+                    } catch (_: Exception) {
+                        true // 如果无法检查，假设进程仍然存活
+                    }
+                    if (!processAlive) {
                         DebugLog.log("GO-CORE", "Watchdog 检测到父进程已退出，强制清理子进程")
                         proc.destroyForcibly()
                         break
