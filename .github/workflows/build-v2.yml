@@ -31,12 +31,12 @@ jobs:
       - name: Cross-compile Go core for Android arm64
         run: |
           cd zray-go
-          mkdir -p ../app/src/main/assets
+          mkdir -p ../app/src/main/jniLibs/arm64-v8a
           GOOS=android GOARCH=arm64 CGO_ENABLED=0 \
             go build -trimpath -ldflags="-s -w" \
-            -o ../app/src/main/assets/zray-core \
+            -o ../app/src/main/jniLibs/arm64-v8a/libzraycore.so \
             ./cmd/zray-client/
-          ls -lh ../app/src/main/assets/zray-core
+          ls -lh ../app/src/main/jniLibs/arm64-v8a/libzraycore.so
           echo "Go 核心编译完成 ✅"
 
       # ========== Android APK 编译 ==========

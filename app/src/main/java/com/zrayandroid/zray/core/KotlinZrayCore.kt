@@ -249,9 +249,35 @@ class KotlinZrayCore : IZrayCore {
 
     /**
      * Zray 协议隧道: TLS → HTTP伪装 → 协议头 → padding → CMD+地址
+     * 支持自动重试（网络中断/RST 场景）
      */
     private fun connectViaZray(atyp: Byte, rawAddr: ByteArray, targetPort: Int, targetHost: String): Socket? {
-        return try {
+        val maxRetries = 3
+        for (attempt in 1..maxRetries) {
+            try {
+                return connectViaZrayOnce(atyp, rawAddr, targetPort, targetHost)
+            } catch (e: Exception) {
+                val msg = e.message ?: ""
+                DebugLog.log("ERROR", "Zray 连接异常 (尝试$attempt/$maxRetries): $msg")
+                // 可重试的错误：连接中断、超时、被拒绝
+                val retryable = msg.contains("ECONNABORTED") ||
+                        msg.contains("ECONNRESET") ||
+                        msg.contains("ECONNREFUSED") ||
+                        msg.contains("Connection reset") ||
+                        msg.contains("Broken pipe") ||
+                        msg.contains("timed out") ||
+                        msg.contains("connect failed")
+                if (!retryable || attempt == maxRetries) {
+                    return null
+                }
+                // 退避等待
+                try { Thread.sleep((attempt * 500).toLong()) } catch (_: Exception) {}
+            }
+        }
+        return null
+    }
+
+    private fun connectViaZrayOnce(atyp: Byte, rawAddr: ByteArray, targetPort: Int, targetHost: String): Socket {
             val tcpSocket = Socket()
             tcpSocket.connect(InetSocketAddress(remoteHost, remotePort), 10000)
             tcpSocket.tcpNoDelay = true
@@ -289,10 +315,7 @@ class KotlinZrayCore : IZrayCore {
 
             DebugLog.log("PROXY", "Zray/TLS 隧道: $targetHost:$targetPort")
             sslSocket.soTimeout = 0
-            sslSocket
-        } catch (e: Exception) {
-            DebugLog.log("ERROR", "Zray 连接异常: ${e.message}")
-            null
+            return sslSocket
         }
     }
 

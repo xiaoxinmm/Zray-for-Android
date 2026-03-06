@@ -39,9 +39,9 @@ class GoZrayCore(private val context: Context) : IZrayCore {
     private var remoteHost = ""
     private var remotePort = 64433
 
-    /** Go 二进制文件路径 */
+    /** Go 二进制文件路径 — 从 nativeLibraryDir 加载（有执行权限） */
     private val binaryFile: File
-        get() = File(context.filesDir, "zray-client")
+        get() = File(context.applicationInfo.nativeLibraryDir, "libzraycore.so")
 
     /** 临时配置文件路径 */
     private val configFile: File
@@ -59,14 +59,14 @@ class GoZrayCore(private val context: Context) : IZrayCore {
 
         currentSocksPort = socksPort
 
-        // 1. 从 assets 解压核心二进制（自动校验 MD5 + chmod）
-        val binary = AssetExtractor.ensureExtracted(context)
-        if (binary == null || !binary.exists()) {
-            val msg = "Go 核心不可用：assets 中未内置或解压失败"
+        // 1. 检查 Go 核心二进制（从 nativeLibraryDir 加载，系统自动解压，有执行权限）
+        if (!binaryFile.exists()) {
+            val msg = "Go 核心不可用：libzraycore.so 未找到于 ${binaryFile.parent}"
             DebugLog.log("ERROR", msg)
             onResult(false, msg)
             return
         }
+        DebugLog.log("GO-CORE", "二进制: ${binaryFile.absolutePath} (${binaryFile.length()/1024}KB)")
 
         // 2. 生成配置文件
         try {
@@ -83,7 +83,7 @@ class GoZrayCore(private val context: Context) : IZrayCore {
         // 3. 启动子进程
         scope.launch {
             try {
-                val pb = ProcessBuilder(binary.absolutePath, "-c", configFile.absolutePath)
+                val pb = ProcessBuilder(binaryFile.absolutePath, "-c", configFile.absolutePath)
                     .directory(context.filesDir)
                     .redirectErrorStream(true)    // stderr 合并到 stdout，统一读取
 
@@ -186,10 +186,7 @@ class GoZrayCore(private val context: Context) : IZrayCore {
     /**
      * 检查 Go 二进制文件是否已就绪
      */
-    fun isBinaryAvailable(): Boolean {
-        // 优先检查已解压的文件，其次检查 assets 中是否内置
-        return (binaryFile.exists() && binaryFile.canExecute()) || AssetExtractor.hasAsset(context)
-    }
+    fun isBinaryAvailable(): Boolean = binaryFile.exists()
 
     /**
      * 获取二进制文件路径（供外部复制文件用）
