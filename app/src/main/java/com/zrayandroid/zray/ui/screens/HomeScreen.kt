@@ -449,19 +449,21 @@ private fun SpeedChart(
                 drawLine(gridColor, Offset(0f, y), Offset(w, y), strokeWidth = 0.5.dp.toPx())
             }
 
-            val allValues = uploadHistory + downloadHistory
-            val maxVal = (allValues.maxOrNull() ?: 1L).coerceAtLeast(1024)
+            val maxVal = maxOf(
+                uploadHistory.maxOrNull() ?: 0L,
+                downloadHistory.maxOrNull() ?: 0L
+            ).coerceAtLeast(1024L)
 
             fun drawSpeedLine(data: List<Long>, color: Color) {
                 if (data.size < 2) return
                 val path = Path()
                 val maxPoints = 30
                 val points = if (data.size > maxPoints) data.takeLast(maxPoints) else data
-                val stepX = w / (maxPoints - 1).coerceAtLeast(1)
+                val stepX = if (maxPoints <= 1) 0f else w / (maxPoints - 1).toFloat()
 
                 points.forEachIndexed { i, value ->
                     val x = i * stepX
-                    val y = h - (value.toFloat() / maxVal * h * 0.9f).coerceIn(0f, h)
+                    val y = h - (value.toFloat() / maxVal.toFloat() * h * 0.9f).coerceIn(0f, h)
                     if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
                 }
 
