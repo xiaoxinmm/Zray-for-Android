@@ -35,9 +35,13 @@ object ZrayCoreMock {
      * onResult: true=成功, false=失败(附带错误信息)
      */
     fun startAsync(config: String, socksPort: Int, onResult: (Boolean, String?) -> Unit) {
-        if (isRunning) {
-            onResult(true, null)
-            return
+        DebugLog.log("CORE", "startAsync 调用, isRunning=$isRunning, serverSocket=${serverSocket != null}")
+        
+        // 强制清理旧状态
+        if (isRunning || serverSocket != null) {
+            DebugLog.log("CORE", "发现旧实例，先清理")
+            stop()
+            try { Thread.sleep(100) } catch (_: Exception) {}
         }
 
         // 解析配置
@@ -64,7 +68,7 @@ object ZrayCoreMock {
                 serverSocket = ss
                 isRunning = true
 
-                DebugLog.log("CORE", "SOCKS5 监听成功: 127.0.0.1:$socksPort")
+                DebugLog.log("CORE", "SOCKS5 监听成功: 127.0.0.1:$socksPort, localPort=${ss.localPort}, isBound=${ss.isBound}")
                 onResult(true, null)
 
                 // 启动延迟探测

@@ -195,6 +195,7 @@ fun ZrayApp(
                         onToggle = {
                             if (isConnecting) return@HomeScreen
                             if (isConnected) {
+                                com.zrayandroid.zray.core.ZrayCoreMock.stop()
                                 onStopService()
                                 isConnected = false
                                 DebugLog.log("UI", "用户点击断开")
