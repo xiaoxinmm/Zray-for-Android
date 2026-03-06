@@ -6,13 +6,26 @@ import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.nio.ByteBuffer
+import java.security.SecureRandom
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 import kotlin.concurrent.thread
 
 /**
- * Zray 核心 — 本地 SOCKS5 代理，通过远程服务器转发流量。
+ * Zray 核心 — 本地 SOCKS5 代理，通过 Zray 协议转发流量。
+ * 
+ * Zray 协议: TLS + HTTP伪装 + 自定义头(时间戳+nonce+userHash) + padding + CMD + 地址
  */
 object ZrayCoreMock {
     private const val TAG = "ZrayCore"
+    private const val PROTOCOL_VERSION: Byte = 0x01
+    private const val CMD_CONNECT: Byte = 0x01
+    private const val ATYP_IPV4: Byte = 0x01
+    private const val ATYP_DOMAIN: Byte = 0x03
+    private const val ATYP_IPV6: Byte = 0x04
 
     @Volatile
     var isRunning = false
@@ -23,21 +36,28 @@ object ZrayCoreMock {
         private set
 
     private var serverSocket: ServerSocket? = null
-    private var listenThread: Thread? = null
     private var latencyThread: Thread? = null
 
     private var remoteHost = ""
-    private var remotePort = 10029
-    private var userHash = ""
-    private var proxyMode = "socks5" // socks5 链式转发
+    private var remotePort = 64433
+    private var userHash = "" // 16 bytes
 
-    /**
-     * 启动核心，异步回调结果。
-     */
+    // 信任所有证书（自签证书需要）
+    private val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+        override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+        override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+    })
+
+    private val sslContext: SSLContext by lazy {
+        SSLContext.getInstance("TLS").apply {
+            init(null, trustAllCerts, SecureRandom())
+        }
+    }
+
     fun startAsync(config: String, socksPort: Int, onResult: (Boolean, String?) -> Unit) {
         DebugLog.log("CORE", "startAsync 调用, isRunning=$isRunning, serverSocket=${serverSocket != null}")
 
-        // 强制清理旧状态
         if (isRunning || serverSocket != null) {
             DebugLog.log("CORE", "发现旧实例，先清理")
             stop()
@@ -49,18 +69,20 @@ object ZrayCoreMock {
             if (config.trimStart().startsWith("{")) {
                 val json = org.json.JSONObject(config)
                 remoteHost = json.optString("remote_host", "")
-                remotePort = json.optInt("remote_port", 10029)
+                remotePort = json.optInt("remote_port", 64433)
                 userHash = json.optString("user_hash", "")
-                proxyMode = json.optString("proxy_mode", "socks5")
             } else {
-                // 尝试解析 host:port 格式
                 parseSimpleConfig(config)
             }
         } catch (e: Exception) {
             DebugLog.log("CORE", "配置解析异常: ${e.message}")
         }
 
-        DebugLog.log("CORE", "远程服务器: $remoteHost:$remotePort, 模式: $proxyMode")
+        // 确保 userHash 是 16 字节
+        if (userHash.length > 16) userHash = userHash.substring(0, 16)
+        while (userHash.length < 16) userHash += "\u0000"
+
+        DebugLog.log("CORE", "远程: $remoteHost:$remotePort, userHash长度=${userHash.length}")
         DebugLog.log("CORE", "尝试启动 SOCKS5 端口: $socksPort")
 
         thread(name = "zray-start") {
@@ -71,19 +93,15 @@ object ZrayCoreMock {
                 serverSocket = ss
                 isRunning = true
 
-                DebugLog.log("CORE", "SOCKS5 监听成功: 127.0.0.1:$socksPort, localPort=${ss.localPort}, isBound=${ss.isBound}")
+                DebugLog.log("CORE", "SOCKS5 监听成功: 127.0.0.1:$socksPort, isBound=${ss.isBound}")
                 onResult(true, null)
 
-                // 启动延迟探测
                 startLatencyProbe()
 
-                // 接受连接循环
                 while (isRunning && !Thread.currentThread().isInterrupted) {
                     try {
                         val client = ss.accept()
-                        thread(name = "zray-conn") {
-                            handleSocks5(client)
-                        }
+                        thread(name = "zray-conn") { handleSocks5(client) }
                     } catch (e: Exception) {
                         if (isRunning) DebugLog.log("CORE", "accept: ${e.message}")
                     }
@@ -91,7 +109,6 @@ object ZrayCoreMock {
             } catch (e: Exception) {
                 val msg = "端口 $socksPort 启动失败: ${e.message}"
                 DebugLog.log("ERROR", msg)
-                Log.e(TAG, msg, e)
                 isRunning = false
                 onResult(false, msg)
             }
@@ -105,27 +122,23 @@ object ZrayCoreMock {
         latencyMs = -1
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
-        listenThread?.interrupt()
-        listenThread = null
         latencyThread?.interrupt()
         latencyThread = null
     }
 
     private fun parseSimpleConfig(config: String) {
-        // 支持格式: host:port 或 zray://host:port 或纯链接
         val cleaned = config.trim()
             .removePrefix("zray://")
             .removePrefix("socks5://")
             .removePrefix("socks://")
 
+        // 支持 host:port:userhash 或 host:port
         val parts = cleaned.split(":")
         if (parts.size >= 2) {
             remoteHost = parts[0]
-            remotePort = parts[1].toIntOrNull() ?: 10029
-            DebugLog.log("CORE", "解析配置: $remoteHost:$remotePort")
-        } else if (parts.size == 1 && parts[0].isNotEmpty()) {
-            remoteHost = parts[0]
-            DebugLog.log("CORE", "解析配置(默认端口): $remoteHost:$remotePort")
+            remotePort = parts[1].toIntOrNull() ?: 64433
+            if (parts.size >= 3) userHash = parts[2]
+            DebugLog.log("CORE", "解析: $remoteHost:$remotePort")
         }
     }
 
@@ -135,41 +148,40 @@ object ZrayCoreMock {
             val input = client.getInputStream()
             val output = client.getOutputStream()
 
-            // === SOCKS5 握手 ===
+            // SOCKS5 握手
             val ver = input.read()
             if (ver != 5) { client.close(); return }
             val nMethods = input.read()
             if (nMethods <= 0 || nMethods > 255) { client.close(); return }
             val methods = ByteArray(nMethods)
             input.readFully(methods)
-            // 回复: 无需认证
             output.write(byteArrayOf(0x05, 0x00))
             output.flush()
 
-            // === SOCKS5 请求 ===
-            val reqVer = input.read() // VER
-            val cmd = input.read()     // CMD
-            val rsv = input.read()     // RSV
-            val atyp = input.read()    // ATYP
+            // SOCKS5 请求
+            input.read() // VER
+            val cmd = input.read()
+            input.read() // RSV
+            val atyp = input.read()
 
             val targetHost: String
-            val rawAddrBytes: ByteArray // 保存原始地址字节用于转发
+            val rawAddrBytes: ByteArray
 
             when (atyp) {
-                0x01 -> { // IPv4
+                0x01 -> {
                     val addr = ByteArray(4)
                     input.readFully(addr)
                     rawAddrBytes = addr
                     targetHost = addr.joinToString(".") { (it.toInt() and 0xFF).toString() }
                 }
-                0x03 -> { // 域名
+                0x03 -> {
                     val len = input.read()
                     val domain = ByteArray(len)
                     input.readFully(domain)
                     rawAddrBytes = byteArrayOf(len.toByte()) + domain
                     targetHost = String(domain)
                 }
-                0x04 -> { // IPv6
+                0x04 -> {
                     val addr = ByteArray(16)
                     input.readFully(addr)
                     rawAddrBytes = addr
@@ -185,52 +197,39 @@ object ZrayCoreMock {
             val portLo = input.read()
             val targetPort = (portHi shl 8) or portLo
 
-            if (cmd != 0x01) { // 只支持 CONNECT
+            if (cmd != 0x01) {
                 output.write(byteArrayOf(0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
                 output.flush()
                 client.close()
                 return
             }
 
-            DebugLog.log("PROXY", "→ $targetHost:$targetPort${if (remoteHost.isNotEmpty()) " (via $remoteHost:$remotePort)" else " (直连)"}")
+            DebugLog.log("PROXY", "→ $targetHost:$targetPort (via Zray $remoteHost:$remotePort)")
 
-            val remote: Socket
-            if (remoteHost.isNotEmpty()) {
-                // === 通过远程服务器转发 (SOCKS5 链式) ===
-                remote = connectViaRemote(atyp, rawAddrBytes, targetPort, targetHost)
-                    ?: run {
-                        DebugLog.log("ERROR", "远程转发失败: $targetHost:$targetPort")
-                        output.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                        output.flush()
-                        client.close()
-                        return
-                    }
-            } else {
-                // === 直连模式 (无远程服务器) ===
-                remote = Socket()
-                try {
-                    remote.connect(InetSocketAddress(targetHost, targetPort), 10000)
-                } catch (e: Exception) {
-                    DebugLog.log("ERROR", "直连失败: $targetHost:$targetPort - ${e.message}")
-                    output.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
-                    output.flush()
-                    client.close()
-                    return
-                }
+            // 通过 Zray 协议连接远程
+            val remote = connectViaZray(atyp.toByte(), rawAddrBytes, targetPort, targetHost)
+            if (remote == null) {
+                DebugLog.log("ERROR", "Zray 转发失败: $targetHost:$targetPort")
+                output.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                output.flush()
+                client.close()
+                return
             }
 
-            // 回复客户端: 成功
+            // 成功
             output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
             output.flush()
 
-            // 双向转发
+            // 双向 relay
+            val remoteIn = remote.getInputStream()
+            val remoteOut = remote.getOutputStream()
             val t1 = thread(name = "relay-up") {
-                try { relay(client.getInputStream(), remote.getOutputStream()) } catch (_: Exception) {}
+                try { relay(client.getInputStream(), remoteOut) } catch (_: Exception) {}
                 try { remote.close() } catch (_: Exception) {}
                 try { client.close() } catch (_: Exception) {}
             }
             val t2 = thread(name = "relay-down") {
-                try { relay(remote.getInputStream(), client.getOutputStream()) } catch (_: Exception) {}
+                try { relay(remoteIn, client.getOutputStream()) } catch (_: Exception) {}
                 try { remote.close() } catch (_: Exception) {}
                 try { client.close() } catch (_: Exception) {}
             }
@@ -244,71 +243,105 @@ object ZrayCoreMock {
     }
 
     /**
-     * 通过远程 SOCKS5 服务器链式转发。
-     * 向远程发送完整的 SOCKS5 握手+请求，建立隧道。
+     * Zray 协议连接:
+     * 1. TCP 连接远程
+     * 2. TLS 握手 (InsecureSkipVerify)
+     * 3. HTTP 伪装头
+     * 4. Zray 协议头 (ver + timestamp + nonce + userHash)
+     * 5. 随机 padding
+     * 6. CMD + 目标地址 (port + atyp + raw)
+     * 7. 返回连接用于 relay
      */
-    private fun connectViaRemote(atyp: Int, rawAddr: ByteArray, targetPort: Int, targetHost: String): Socket? {
+    private fun connectViaZray(atyp: Byte, rawAddr: ByteArray, targetPort: Int, targetHost: String): Socket? {
         return try {
-            val remote = Socket()
-            remote.connect(InetSocketAddress(remoteHost, remotePort), 10000)
-            remote.soTimeout = 30000
+            // 1. TCP 连接
+            val tcpSocket = Socket()
+            tcpSocket.connect(InetSocketAddress(remoteHost, remotePort), 10000)
+            tcpSocket.tcpNoDelay = true
 
-            val rIn = remote.getInputStream()
-            val rOut = remote.getOutputStream()
+            // 2. TLS 握手
+            val sslSocket = sslContext.socketFactory.createSocket(
+                tcpSocket, remoteHost, remotePort, true
+            ) as SSLSocket
+            sslSocket.startHandshake()
+            sslSocket.soTimeout = 30000
 
-            // SOCKS5 握手
-            rOut.write(byteArrayOf(0x05, 0x01, 0x00)) // VER, 1 method, NO AUTH
-            rOut.flush()
+            val out = sslSocket.getOutputStream()
 
-            val sVer = rIn.read()
-            val sMethod = rIn.read()
-            if (sVer != 0x05 || sMethod != 0x00) {
-                DebugLog.log("ERROR", "远程握手失败: ver=$sVer method=$sMethod")
-                remote.close()
-                return null
-            }
+            // 3. HTTP 伪装头
+            writeHttpCamo(out, remoteHost)
 
-            // SOCKS5 CONNECT 请求
-            val req = mutableListOf<Byte>()
-            req.add(0x05) // VER
-            req.add(0x01) // CMD: CONNECT
-            req.add(0x00) // RSV
-            req.add(atyp.toByte()) // ATYP
-            rawAddr.forEach { req.add(it) }
-            req.add((targetPort shr 8).toByte())
-            req.add((targetPort and 0xFF).toByte())
+            // 4. Zray 协议头: ver(1) + timestamp(8) + nonce(8) + userHash(16) = 33 bytes
+            val header = ByteArray(33)
+            header[0] = PROTOCOL_VERSION
+            val timestamp = System.currentTimeMillis() / 1000
+            ByteBuffer.wrap(header, 1, 8).putLong(timestamp)
+            val nonce = ByteArray(8)
+            SecureRandom().nextBytes(nonce)
+            System.arraycopy(nonce, 0, header, 9, 8)
+            val hashBytes = userHash.toByteArray(Charsets.ISO_8859_1)
+            System.arraycopy(hashBytes, 0, header, 17, minOf(hashBytes.size, 16))
+            out.write(header)
 
-            rOut.write(req.toByteArray())
-            rOut.flush()
+            // 5. 随机 padding: padLen(1) + random(padLen)
+            val padLen = (10 + (Math.random() * 50).toInt())
+            out.write(padLen)
+            val padding = ByteArray(padLen)
+            SecureRandom().nextBytes(padding)
+            out.write(padding)
 
-            // 读取回复
-            val repVer = rIn.read()
-            val repStatus = rIn.read()
-            rIn.read() // RSV
-            val repAtyp = rIn.read()
+            // 6. CMD
+            out.write(CMD_CONNECT.toInt())
 
-            // 跳过绑定地址
-            when (repAtyp) {
-                0x01 -> { val skip = ByteArray(4); rIn.readFully(skip) }
-                0x03 -> { val len = rIn.read(); val skip = ByteArray(len); rIn.readFully(skip) }
-                0x04 -> { val skip = ByteArray(16); rIn.readFully(skip) }
-            }
-            rIn.read() // port hi
-            rIn.read() // port lo
+            // 7. 目标地址: port(2) + atyp(1) + rawAddr
+            val portBuf = ByteArray(2)
+            portBuf[0] = (targetPort shr 8).toByte()
+            portBuf[1] = (targetPort and 0xFF).toByte()
+            out.write(portBuf)
+            out.write(atyp.toInt())
+            out.write(rawAddr)
 
-            if (repStatus != 0x00) {
-                DebugLog.log("ERROR", "远程拒绝连接: status=$repStatus, target=$targetHost:$targetPort")
-                remote.close()
-                return null
-            }
+            out.flush()
 
-            DebugLog.log("PROXY", "远程隧道建立: $targetHost:$targetPort via $remoteHost:$remotePort")
-            remote.soTimeout = 0 // 隧道建立后取消超时
-            remote
+            DebugLog.log("PROXY", "Zray 隧道建立: $targetHost:$targetPort via TLS→$remoteHost:$remotePort")
+            sslSocket.soTimeout = 0
+            sslSocket
         } catch (e: Exception) {
-            DebugLog.log("ERROR", "远程连接异常: ${e.message}")
+            DebugLog.log("ERROR", "Zray 连接异常: ${e.message}")
             null
         }
+    }
+
+    /**
+     * HTTP 伪装头 — 模拟正常浏览器 GET 请求
+     */
+    private fun writeHttpCamo(out: OutputStream, host: String) {
+        val paths = listOf(
+            "/", "/index.html", "/api/v1/status", "/search?q=keyword",
+            "/blog/2024/01/welcome", "/static/css/main.css", "/ws",
+            "/login", "/dashboard", "/assets/logo.png",
+            "/cdn-cgi/trace", "/favicon.ico", "/robots.txt"
+        )
+        val path = paths.random()
+        val sb = StringBuilder()
+        sb.append("GET $path HTTP/1.1\r\n")
+        sb.append("Host: $host\r\n")
+        sb.append("Connection: keep-alive\r\n")
+        sb.append("Cache-Control: max-age=0\r\n")
+        sb.append("sec-ch-ua: \"Chromium\";v=\"122\", \"Not(A:Brand\";v=\"24\", \"Google Chrome\";v=\"122\"\r\n")
+        sb.append("sec-ch-ua-mobile: ?0\r\n")
+        sb.append("sec-ch-ua-platform: \"Windows\"\r\n")
+        sb.append("Upgrade-Insecure-Requests: 1\r\n")
+        sb.append("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36\r\n")
+        sb.append("Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8\r\n")
+        sb.append("Sec-Fetch-Site: none\r\n")
+        sb.append("Sec-Fetch-Mode: navigate\r\n")
+        sb.append("Sec-Fetch-User: ?1\r\n")
+        sb.append("Sec-Fetch-Dest: document\r\n")
+        sb.append("Accept-Encoding: gzip, deflate, br\r\n")
+        sb.append("Accept-Language: en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7\r\n")
+        sb.append("\r\n")
+        out.write(sb.toString().toByteArray())
     }
 
     private fun startLatencyProbe() {
@@ -322,14 +355,8 @@ object ZrayCoreMock {
                         latencyMs = System.currentTimeMillis() - start
                         sock.close()
                         DebugLog.log("LATENCY", "${latencyMs}ms → $remoteHost:$remotePort")
-                    } else {
-                        val start = System.currentTimeMillis()
-                        val sock = Socket()
-                        sock.connect(InetSocketAddress("127.0.0.1", serverSocket?.localPort ?: 1081), 1000)
-                        latencyMs = System.currentTimeMillis() - start
-                        sock.close()
                     }
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     latencyMs = -1
                 }
                 try { Thread.sleep(5000) } catch (_: InterruptedException) { break }
@@ -338,7 +365,7 @@ object ZrayCoreMock {
     }
 
     private fun relay(input: InputStream, output: OutputStream) {
-        val buf = ByteArray(8192)
+        val buf = ByteArray(32 * 1024)
         while (true) {
             val n = input.read(buf)
             if (n < 0) break
