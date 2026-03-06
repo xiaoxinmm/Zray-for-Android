@@ -267,14 +267,13 @@ class KotlinZrayCore : IZrayCore {
             } finally {
                 TrafficStats.activeConns.decrementAndGet()
             }
-        } catch (e: java.net.SocketException) {
-            // Connection reset / Socket closed — 正常的网络抖动或连接关闭，无需 ERROR 级别
-        } catch (e: java.io.IOException) {
-            // EBADF / Broken pipe / Read timed out — 远端已关闭，安静忽略
+        } catch (_: java.io.IOException) {
+            // SocketException (Connection reset) / IOException (EBADF, Broken pipe, Read timed out)
+            // — 正常的网络抖动或远端关闭，安静忽略
         } catch (e: Exception) {
             DebugLog.log("ERROR", "SOCKS5: ${e.message}")
         } finally {
-            try { client.close() } catch (e: Exception) {}
+            try { client.close() } catch (_: Exception) {}
         }
     }
 
@@ -397,11 +396,8 @@ class KotlinZrayCore : IZrayCore {
                 output.flush()
                 counter.addAndGet(n.toLong())
             }
-        } catch (_: java.net.SocketException) {
-            // Connection reset / Socket closed — 远端正常关闭或网络中断，
-            // 视作流结束，无需报错
         } catch (_: java.io.IOException) {
-            // EBADF / Broken pipe — 连接已由远端关闭，忽略
+            // Connection reset / EBADF / Broken pipe — 远端关闭或网络中断，视作流正常结束
         }
     }
 

@@ -462,6 +462,7 @@ class ZrayVpnService : VpnService() {
     private fun buildIcmpPortUnreachable(origPkt: ByteBuffer, ihl: Int, newSrcIp: String, newDstIp: String): ByteArray? {
         try {
             // ICMP 载荷 = 原始 IP 头 + 原始数据前 8 字节（UDP 头）
+            // RFC 792: ICMP 错误报文必须包含原始 IP 头 + 原始数据的前 8 字节
             val quotedLen = minOf(ihl + 8, origPkt.limit())
             val total = 20 + 8 + quotedLen  // 新IP头 + ICMP头 + 引用数据
             val p = ByteArray(total)
