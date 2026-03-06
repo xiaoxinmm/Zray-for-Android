@@ -168,15 +168,17 @@ class GoZrayCore(private val context: Context) : IZrayCore {
         // 发送 SIGTERM 优雅终止
         process?.let { proc ->
             try {
-                proc.destroy() // 发送 SIGTERM
+                proc.destroy()
                 DebugLog.log("GO-CORE", "已发送 SIGTERM")
-
-                // 等待最多 3 秒
-                val waitThread = Thread { try { proc.waitFor() } catch (_: Exception) {} }
+                // 等待3秒，超时则强杀
+                val waitThread = Thread {
+                    try { proc.waitFor() } catch (_: Exception) {}
+                }
                 waitThread.start()
                 waitThread.join(3000)
-                if (waitThread.isAlive) {
-                    proc.destroyForcibly() // 强制 SIGKILL
+                val stillAlive = waitThread.isAlive
+                if (stillAlive) {
+                    proc.destroyForcibly()
                     DebugLog.log("GO-CORE", "强制 SIGKILL")
                 }
             } catch (e: Exception) {
