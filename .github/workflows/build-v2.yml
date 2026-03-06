@@ -20,6 +20,7 @@ jobs:
           repository: xiaoxinmm/Zray
           path: zray-go
           ref: main
+          token: ${{ secrets.GH_PAT }}
 
       # ========== Go 核心交叉编译 ==========
       - name: Set up Go 1.24
