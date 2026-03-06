@@ -59,6 +59,10 @@ class ZrayVpnService : VpnService() {
                 socksPort = intent.getIntExtra(EXTRA_SOCKS_PORT, 1081)
                 val mode = try { ProxyMode.valueOf(intent.getStringExtra(EXTRA_MODE) ?: "") } catch (_: Exception) { ProxyMode.VPN_PER_APP }
                 val apps = intent.getStringArrayListExtra(EXTRA_SELECTED_APPS)?.toSet() ?: emptySet()
+                if (mode == ProxyMode.VPN_PER_APP && apps.isEmpty()) {
+                    DebugLog.log("VPN", "VPN 分应用模式未选择任何应用，跳过启动")
+                    return START_NOT_STICKY
+                }
                 startVpn(mode, apps)
             }
         }
