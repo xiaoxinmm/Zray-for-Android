@@ -310,12 +310,10 @@ class GoZrayCore(private val context: Context) : IZrayCore {
             try {
                 while (isActive && running && proc.isAlive) {
                     delay(3000)
-                    // 检查 Android 进程是否还存在
-                    try {
-                        android.os.Process.getUidForPid(myPid)
-                    } catch (_: Exception) {
-                        // 进程可能已经被杀
-                        DebugLog.log("GO-CORE", "Watchdog 检测到父进程异常，强制清理子进程")
+                    // 检查 Android 进程是否还存在（返回 -1 表示进程不存在）
+                    val uid = android.os.Process.getUidForPid(myPid)
+                    if (uid == -1) {
+                        DebugLog.log("GO-CORE", "Watchdog 检测到父进程已退出，强制清理子进程")
                         proc.destroyForcibly()
                         break
                     }

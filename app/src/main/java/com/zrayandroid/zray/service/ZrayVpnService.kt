@@ -306,8 +306,17 @@ class ZrayVpnService : VpnService() {
         val payload = ByteArray(payLen)
         System.arraycopy(pkt.array(), payStart, payload, 0, payLen)
 
-        // 会话 Key：srcPort + dstIp + dstPort 的组合
-        val sessionKey = (srcPort.toLong() shl 32) or ((dstIp.hashCode().toLong() and 0xFFFFFFFFL) xor dstPort.toLong())
+        // 会话 Key：srcPort + dstIp(numeric) + dstPort 的组合，避免 hashCode 碰撞
+        val ipParts = dstIp.split(".")
+        val ipNumeric = if (ipParts.size == 4) {
+            ((ipParts[0].toLong() and 0xFF) shl 24) or
+            ((ipParts[1].toLong() and 0xFF) shl 16) or
+            ((ipParts[2].toLong() and 0xFF) shl 8) or
+            (ipParts[3].toLong() and 0xFF)
+        } else {
+            dstIp.hashCode().toLong() and 0xFFFFFFFFL
+        }
+        val sessionKey = (srcPort.toLong() shl 32) or (ipNumeric xor dstPort.toLong())
 
         val session = udpSessions.getOrPut(sessionKey) {
             val ds = DatagramSocket()

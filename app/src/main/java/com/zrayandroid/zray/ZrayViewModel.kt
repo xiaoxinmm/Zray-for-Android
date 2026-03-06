@@ -128,7 +128,7 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
     /** 每秒刷新流量统计和延迟 */
     private fun startTrafficTicker() {
         viewModelScope.launch {
-            while (true) {
+            while (isActive) {
                 if (_isConnected.value) {
                     _latencyMs.value = coreManager.getLatency()
                     TrafficStats.tick()
