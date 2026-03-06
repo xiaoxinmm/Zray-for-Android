@@ -9,3 +9,4 @@
 *.aab
 /app/build
 /app/release
+release.keystore

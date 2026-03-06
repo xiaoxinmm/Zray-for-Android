@@ -24,11 +24,23 @@ jobs:
         with:
           gradle-version: '8.5'
 
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/release.keystore
+
+      - name: Build Release APK (signed)
+        env:
+          KEYSTORE_FILE: release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: gradle assembleRelease
+
       - name: Build Debug APK
         run: gradle assembleDebug
 
-      - name: Build Release APK
-        run: gradle assembleRelease
+      - name: List outputs
+        run: find app/build/outputs/apk -name "*.apk" -exec ls -lh {} \;
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
@@ -36,15 +48,22 @@ jobs:
           name: apk-files
           path: |
             app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk
             app/build/outputs/apk/release/app-release-unsigned.apk
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v1.2.0
-          name: "v1.2.0"
+          tag_name: v${{ steps.version.outputs.version }}
+          name: "v${{ steps.version.outputs.version }}"
           files: |
+            app/build/outputs/apk/release/app-release.apk
             app/build/outputs/apk/debug/app-debug.apk
-            app/build/outputs/apk/release/app-release-unsigned.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
