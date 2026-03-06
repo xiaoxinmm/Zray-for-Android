@@ -35,7 +35,7 @@ object ProfileStore {
     }
 
     suspend fun loadDnsServer(context: Context): String {
-        return context.dataStore.data.first()[DNS_SERVER_KEY] ?: "https://dns.alidns.com/dns-query"
+        return context.dataStore.data.first()[DNS_SERVER_KEY] ?: ZrayDnsResolver.DEFAULT_DOH_SERVER
     }
 
     suspend fun saveProfiles(context: Context, profiles: List<Profile>, activeId: String?) {

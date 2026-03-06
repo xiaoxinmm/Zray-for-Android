@@ -11,6 +11,7 @@ import java.net.InetSocketAddress
 import java.net.URL
 import java.nio.ByteBuffer
 import javax.net.ssl.SSLSocketFactory
+import kotlin.random.Random
 
 /**
  * DNS 协议类型
@@ -27,6 +28,14 @@ enum class DnsProtocol {
  */
 object ZrayDnsResolver {
 
+    /** DNS 默认服务器常量 */
+    const val DEFAULT_UDP_SERVER = "8.8.8.8"
+    const val DEFAULT_DOH_SERVER = "https://dns.alidns.com/dns-query"
+    const val DEFAULT_DOT_SERVER = "1.1.1.1"
+
+    /** DNS 名称压缩指针最大跳转次数 */
+    private const val MAX_DNS_NAME_POINTER_HOPS = 128
+
     /** 当前 DNS 协议 */
     @Volatile
     var protocol: DnsProtocol = DnsProtocol.DOH
@@ -37,7 +46,7 @@ object ZrayDnsResolver {
      *  - DoT: IP 地址，如 "1.1.1.1" 或 "1.1.1.1:853"
      */
     @Volatile
-    var server: String = "https://dns.alidns.com/dns-query"
+    var server: String = DEFAULT_DOH_SERVER
 
     /** VPN protect 回调 — 由 VpnService 设置，用于保护 DNS socket 不走 VPN 通道 */
     @Volatile
@@ -221,7 +230,7 @@ object ZrayDnsResolver {
         val baos = ByteArrayOutputStream()
 
         // Transaction ID (随机)
-        val txId = (Math.random() * 0xFFFF).toInt()
+        val txId = Random.nextInt(0xFFFF)
         baos.write(txId shr 8)
         baos.write(txId and 0xFF)
 
@@ -311,7 +320,7 @@ object ZrayDnsResolver {
     private fun skipDnsName(data: ByteArray, startPos: Int): Int? {
         var pos = startPos
         var jumped = false
-        var maxLoops = 128 // 防止无限循环
+        var maxLoops = MAX_DNS_NAME_POINTER_HOPS
 
         while (pos < data.size && maxLoops-- > 0) {
             val len = data[pos].toInt() and 0xFF

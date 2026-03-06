@@ -15,6 +15,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.zrayandroid.zray.core.CoreType
 import com.zrayandroid.zray.core.DnsProtocol
+import com.zrayandroid.zray.core.ZrayDnsResolver
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -31,7 +32,7 @@ fun SettingsScreen(
     onInsecureSslToggle: (Boolean) -> Unit = {},
     dnsProtocol: DnsProtocol = DnsProtocol.DOH,
     onDnsProtocolChange: (DnsProtocol) -> Unit = {},
-    dnsServer: String = "https://dns.alidns.com/dns-query",
+    dnsServer: String = ZrayDnsResolver.DEFAULT_DOH_SERVER,
     onDnsServerChange: (String) -> Unit = {},
     onOpenLogViewer: () -> Unit = {}
 ) {
@@ -174,8 +175,8 @@ fun SettingsScreen(
                             text = { Text("UDP (传统 DNS)") },
                             onClick = {
                                 onDnsProtocolChange(DnsProtocol.UDP)
-                                dnsServerText = "8.8.8.8"
-                                onDnsServerChange("8.8.8.8")
+                                dnsServerText = ZrayDnsResolver.DEFAULT_UDP_SERVER
+                                onDnsServerChange(ZrayDnsResolver.DEFAULT_UDP_SERVER)
                                 dnsExpanded = false
                             }
                         )
@@ -183,8 +184,8 @@ fun SettingsScreen(
                             text = { Text("DoH (DNS over HTTPS)") },
                             onClick = {
                                 onDnsProtocolChange(DnsProtocol.DOH)
-                                dnsServerText = "https://dns.alidns.com/dns-query"
-                                onDnsServerChange("https://dns.alidns.com/dns-query")
+                                dnsServerText = ZrayDnsResolver.DEFAULT_DOH_SERVER
+                                onDnsServerChange(ZrayDnsResolver.DEFAULT_DOH_SERVER)
                                 dnsExpanded = false
                             }
                         )
@@ -192,8 +193,8 @@ fun SettingsScreen(
                             text = { Text("DoT (DNS over TLS)") },
                             onClick = {
                                 onDnsProtocolChange(DnsProtocol.DOT)
-                                dnsServerText = "1.1.1.1"
-                                onDnsServerChange("1.1.1.1")
+                                dnsServerText = ZrayDnsResolver.DEFAULT_DOT_SERVER
+                                onDnsServerChange(ZrayDnsResolver.DEFAULT_DOT_SERVER)
                                 dnsExpanded = false
                             }
                         )
@@ -221,9 +222,9 @@ fun SettingsScreen(
                     placeholder = {
                         Text(
                             when (dnsProtocol) {
-                                DnsProtocol.UDP -> "8.8.8.8"
-                                DnsProtocol.DOH -> "https://dns.alidns.com/dns-query"
-                                DnsProtocol.DOT -> "1.1.1.1"
+                                DnsProtocol.UDP -> ZrayDnsResolver.DEFAULT_UDP_SERVER
+                                DnsProtocol.DOH -> ZrayDnsResolver.DEFAULT_DOH_SERVER
+                                DnsProtocol.DOT -> ZrayDnsResolver.DEFAULT_DOT_SERVER
                             }
                         )
                     },

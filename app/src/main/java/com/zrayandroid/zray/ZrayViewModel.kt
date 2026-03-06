@@ -55,7 +55,7 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
     private val _dnsProtocol = MutableStateFlow(DnsProtocol.DOH)
     val dnsProtocol: StateFlow<DnsProtocol> = _dnsProtocol.asStateFlow()
 
-    private val _dnsServer = MutableStateFlow("https://dns.alidns.com/dns-query")
+    private val _dnsServer = MutableStateFlow(ZrayDnsResolver.DEFAULT_DOH_SERVER)
     val dnsServer: StateFlow<String> = _dnsServer.asStateFlow()
 
     // ==================== 路由 ====================
