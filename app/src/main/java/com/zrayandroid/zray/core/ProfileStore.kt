@@ -16,6 +16,7 @@ object ProfileStore {
     private val PROFILES_KEY = stringPreferencesKey("profiles_json")
     private val ACTIVE_ID_KEY = stringPreferencesKey("active_profile_id")
     private val SOCKS_PORT_KEY = intPreferencesKey("socks_port")
+    private val ALLOW_INSECURE_SSL_KEY = booleanPreferencesKey("allow_insecure_ssl")
 
     suspend fun saveProfiles(context: Context, profiles: List<Profile>, activeId: String?) {
         val arr = JSONArray()
@@ -65,5 +66,14 @@ object ProfileStore {
 
     suspend fun loadSocksPort(context: Context): Int {
         return context.dataStore.data.first()[SOCKS_PORT_KEY] ?: 1081
+    }
+
+    suspend fun saveAllowInsecureSsl(context: Context, allow: Boolean) {
+        context.dataStore.edit { it[ALLOW_INSECURE_SSL_KEY] = allow }
+    }
+
+    /** 默认 true 以保持向后兼容（允许自签证书） */
+    suspend fun loadAllowInsecureSsl(context: Context): Boolean {
+        return context.dataStore.data.first()[ALLOW_INSECURE_SSL_KEY] ?: true
     }
 }

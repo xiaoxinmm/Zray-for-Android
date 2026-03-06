@@ -152,6 +152,7 @@ fun ZrayApp(
     var updateInfo by remember { mutableStateOf<com.zrayandroid.zray.core.UpdateChecker.UpdateInfo?>(null) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     var selectedCoreType by remember { mutableStateOf(com.zrayandroid.zray.core.CoreType.KOTLIN_CORE) }
+    var allowInsecureSsl by remember { mutableStateOf(true) }
 
     // 路由配置
     var routingConfig by remember { mutableStateOf(com.zrayandroid.zray.core.RoutingConfig()) }
@@ -177,9 +178,12 @@ fun ZrayApp(
     LaunchedEffect(Unit) {
         val (savedProfiles, savedActiveId) = ProfileStore.loadProfiles(context)
         val savedPort = ProfileStore.loadSocksPort(context)
+        val savedInsecureSsl = ProfileStore.loadAllowInsecureSsl(context)
         profiles = savedProfiles
         activeProfileId = savedActiveId
         socksPort = savedPort
+        allowInsecureSsl = savedInsecureSsl
+        coreManager.allowInsecureSsl = savedInsecureSsl
         loaded = true
         DebugLog.log("APP", "本地配置加载完成: ${savedProfiles.size} 个节点")
     }
@@ -430,7 +434,16 @@ fun ZrayApp(
                             DebugLog.log("SETTINGS", "核心切换为: ${type.displayName}")
                         },
                         isGoCoreAvailable = coreManager.isGoCoreAvailable(),
-                        goBinaryPath = coreManager.getGoBinaryPath()
+                        goBinaryPath = coreManager.getGoBinaryPath(),
+                        allowInsecureSsl = allowInsecureSsl,
+                        onInsecureSslToggle = { allow ->
+                            allowInsecureSsl = allow
+                            coreManager.allowInsecureSsl = allow
+                            scope.launch {
+                                ProfileStore.saveAllowInsecureSsl(context, allow)
+                            }
+                            DebugLog.log("SETTINGS", "SSL 不安全证书: ${if (allow) "允许" else "禁止"}")
+                        }
                     )
                 }
             }

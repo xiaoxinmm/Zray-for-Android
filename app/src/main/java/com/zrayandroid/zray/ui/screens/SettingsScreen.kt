@@ -23,7 +23,9 @@ fun SettingsScreen(
     selectedCoreType: CoreType = CoreType.KOTLIN_CORE,
     onCoreTypeChange: (CoreType) -> Unit = {},
     isGoCoreAvailable: Boolean = false,
-    goBinaryPath: String = ""
+    goBinaryPath: String = "",
+    allowInsecureSsl: Boolean = true,
+    onInsecureSslToggle: (Boolean) -> Unit = {}
 ) {
     var portText by remember { mutableStateOf(socksPort.toString()) }
     var showAbout by remember { mutableStateOf(false) }
@@ -140,6 +142,35 @@ fun SettingsScreen(
                     )
                 }
                 Switch(checked = debugEnabled, onCheckedChange = onDebugToggle)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ===== SSL 证书校验开关 =====
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("允许不安全的 SSL 证书", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (allowInsecureSsl) "跳过证书校验（适用于自签证书）"
+                        else "严格校验 SSL 证书（更安全）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+                Switch(checked = allowInsecureSsl, onCheckedChange = onInsecureSslToggle)
             }
         }
 

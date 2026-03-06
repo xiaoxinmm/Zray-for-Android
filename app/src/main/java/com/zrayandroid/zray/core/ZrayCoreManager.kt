@@ -32,6 +32,10 @@ class ZrayCoreManager(private val context: Context) {
     var selectedCoreType: CoreType = CoreType.KOTLIN_CORE
         private set
 
+    /** 是否允许不安全的 SSL 证书 */
+    @Volatile
+    var allowInsecureSsl: Boolean = true
+
     /** 操作互斥锁，保证核心切换的线程安全 */
     private val mutex = Mutex()
 
@@ -89,6 +93,11 @@ class ZrayCoreManager(private val context: Context) {
 
                 val core = activeCore!!
                 DebugLog.log("MANAGER", "启动核心: ${core.coreType.displayName}, 端口: $socksPort")
+
+                // 应用 SSL 配置到 KotlinZrayCore
+                if (core is KotlinZrayCore) {
+                    core.allowInsecureSsl = allowInsecureSsl
+                }
 
                 // 在 IO 线程启动核心
                 withContext(Dispatchers.IO) {
