@@ -36,7 +36,7 @@ import com.zrayandroid.zray.ui.screens.*
 import com.zrayandroid.zray.ui.theme.ZrayTheme
 import kotlinx.coroutines.launch
 
-const val APP_VERSION = "1.2.0"
+const val APP_VERSION = BuildConfig.VERSION_NAME
 
 class MainActivity : ComponentActivity() {
 
