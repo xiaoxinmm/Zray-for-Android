@@ -28,6 +28,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".LogViewerActivity"
+            android:exported="false"
+            android:theme="@style/Theme.ZrayForAndroid" />
+
         <service
             android:name=".service.ZrayService"
             android:exported="false"

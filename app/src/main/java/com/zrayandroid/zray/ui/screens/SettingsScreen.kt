@@ -25,7 +25,8 @@ fun SettingsScreen(
     isGoCoreAvailable: Boolean = false,
     goBinaryPath: String = "",
     allowInsecureSsl: Boolean = true,
-    onInsecureSslToggle: (Boolean) -> Unit = {}
+    onInsecureSslToggle: (Boolean) -> Unit = {},
+    onOpenLogViewer: () -> Unit = {}
 ) {
     var portText by remember { mutableStateOf(socksPort.toString()) }
     var showAbout by remember { mutableStateOf(false) }
@@ -119,29 +120,39 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // ===== Debug 开关 =====
+        // ===== 调试模式开关 =====
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
             )
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text("Debug 日志", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "开启后在顶部显示实时日志窗口",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                    )
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("调试模式", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            if (debugEnabled) "已开启 — 全量日志将保存至文件"
+                            else "关闭状态 — 仅保留内存日志",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                    Switch(checked = debugEnabled, onCheckedChange = onDebugToggle)
                 }
-                Switch(checked = debugEnabled, onCheckedChange = onDebugToggle)
+                Spacer(modifier = Modifier.height(8.dp))
+                // 查看日志按钮
+                OutlinedButton(
+                    onClick = onOpenLogViewer,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("查看日志")
+                }
             }
         }
 

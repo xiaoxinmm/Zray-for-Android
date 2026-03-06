@@ -32,7 +32,6 @@ import com.zrayandroid.zray.navigation.Screen
 import com.zrayandroid.zray.navigation.screens
 import com.zrayandroid.zray.navigation.screenTitle
 import com.zrayandroid.zray.service.ZrayService
-import com.zrayandroid.zray.ui.components.DebugOverlay
 import com.zrayandroid.zray.ui.screens.*
 import com.zrayandroid.zray.ui.theme.ZrayTheme
 
@@ -304,16 +303,16 @@ fun ZrayApp(
                         isGoCoreAvailable = vm.coreManager.isGoCoreAvailable(),
                         goBinaryPath = vm.coreManager.getGoBinaryPath(),
                         allowInsecureSsl = allowInsecureSsl,
-                        onInsecureSslToggle = { vm.setAllowInsecureSsl(it) }
+                        onInsecureSslToggle = { vm.setAllowInsecureSsl(it) },
+                        onOpenLogViewer = {
+                            DebugLog.log("UI", "用户点击查看日志")
+                            context.startActivity(
+                                android.content.Intent(context, LogViewerActivity::class.java)
+                            )
+                        }
                     )
                 }
             }
-
-            // Debug 浮窗
-            DebugOverlay(
-                visible = debugEnabled,
-                onDismiss = { vm.setDebugEnabled(false) }
-            )
         }
     }
 

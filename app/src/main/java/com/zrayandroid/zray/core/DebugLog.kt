@@ -10,6 +10,9 @@ import java.util.*
 
 /**
  * 全局日志收集器 — 内存 + 文件双写。
+ *
+ * 当 debugMode 开启时，所有日志写入文件，供调试使用。
+ * 当 debugMode 关闭时，仅保留内存日志，不写入文件。
  */
 object DebugLog {
     private val _logs = MutableStateFlow<List<String>>(emptyList())
@@ -23,16 +26,32 @@ object DebugLog {
     private var fileWriter: FileWriter? = null
     private var currentDate: String = ""
 
+    /** 调试模式开关：开启后日志写入文件，关闭后仅内存日志 */
+    @Volatile
+    var debugMode: Boolean = false
+        set(value) {
+            field = value
+            if (value) {
+                // 开启时确保文件已打开
+                ensureFileOpen()
+            } else {
+                // 关闭时释放文件写入器
+                closeFileWriter()
+            }
+        }
+
     /**
      * 初始化文件日志。在 Application 或 Activity onCreate 中调用。
      */
     fun init(context: Context) {
         try {
             logDir = File(context.filesDir, "logs").also { it.mkdirs() }
-            rotateFile()
-            log("LOG", "文件日志初始化完成: ${logDir?.absolutePath}")
+            if (debugMode) {
+                ensureFileOpen()
+            }
+            log("LOG", "日志系统初始化完成: ${logDir?.absolutePath}")
         } catch (e: Exception) {
-            android.util.Log.e("DebugLog", "文件日志初始化失败", e)
+            android.util.Log.e("DebugLog", "日志系统初始化失败", e)
         }
     }
 
@@ -50,8 +69,10 @@ object DebugLog {
             _logs.value = current
         }
 
-        // 文件
-        writeToFile(line)
+        // 调试模式时写入文件
+        if (debugMode) {
+            writeToFile(line)
+        }
     }
 
     fun clear() {
@@ -61,12 +82,13 @@ object DebugLog {
     fun getAllText(): String = _logs.value.joinToString("\n")
 
     /**
-     * 获取所有日志文件内容（用于一键导出/复制）
+     * 获取所有日志文件内容（用于查看器显示）
      */
     fun getFullFileLog(): String {
         return try {
             val dir = logDir ?: return getAllText()
             val files = dir.listFiles()?.sortedBy { it.name } ?: return getAllText()
+            if (files.isEmpty()) return "暂无日志文件"
             files.joinToString("\n\n") { f ->
                 "=== ${f.name} ===\n${f.readText()}"
             }
@@ -82,6 +104,36 @@ object DebugLog {
         val dir = logDir ?: return null
         val today = dateFmt.format(Date())
         return File(dir, "zray-$today.log").takeIf { it.exists() }
+    }
+
+    /**
+     * 获取日志目录
+     */
+    fun getLogDir(): File? = logDir
+
+    /**
+     * 获取所有日志文件列表（按日期排序）
+     */
+    fun getLogFiles(): List<File> {
+        val dir = logDir ?: return emptyList()
+        return dir.listFiles()?.sortedByDescending { it.name }?.toList() ?: emptyList()
+    }
+
+    /**
+     * 清理所有日志文件
+     */
+    fun clearLogFiles() {
+        try {
+            closeFileWriter()
+            logDir?.listFiles()?.forEach { it.delete() }
+            _logs.value = emptyList()
+            if (debugMode) {
+                ensureFileOpen()
+                log("LOG", "日志文件已清理")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DebugLog", "清理日志文件失败", e)
+        }
     }
 
     private fun writeToFile(line: String) {
@@ -100,10 +152,21 @@ object DebugLog {
         }
     }
 
-    private fun rotateFile() {
+    private fun ensureFileOpen() {
+        if (fileWriter == null || dateFmt.format(Date()) != currentDate) {
+            rotateFile()
+        }
+    }
+
+    private fun closeFileWriter() {
         try {
             fileWriter?.close()
-        } catch (e: Exception) {}
+        } catch (_: Exception) {}
+        fileWriter = null
+    }
+
+    private fun rotateFile() {
+        closeFileWriter()
 
         val dir = logDir ?: return
         currentDate = dateFmt.format(Date())
@@ -116,6 +179,6 @@ object DebugLog {
             dir.listFiles()?.forEach { f ->
                 if (f.lastModified() < cutoff) f.delete()
             }
-        } catch (e: Exception) {}
+        } catch (_: Exception) {}
     }
 }

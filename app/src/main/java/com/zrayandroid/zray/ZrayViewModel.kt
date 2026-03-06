@@ -158,7 +158,8 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissUpdateDialog() { _showUpdateDialog.value = false }
     fun setDebugEnabled(enabled: Boolean) {
         _debugEnabled.value = enabled
-        DebugLog.log("SETTINGS", "Debug ${if (enabled) "开启" else "关闭"}")
+        DebugLog.debugMode = enabled
+        DebugLog.log("SETTINGS", "调试模式 ${if (enabled) "开启" else "关闭"}")
     }
 
     fun setSocksPort(port: Int) {
