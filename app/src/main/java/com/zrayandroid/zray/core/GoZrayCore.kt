@@ -172,8 +172,10 @@ class GoZrayCore(private val context: Context) : IZrayCore {
                 DebugLog.log("GO-CORE", "已发送 SIGTERM")
 
                 // 等待最多 3 秒
-                val exited = proc.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)
-                if (!exited) {
+                val waitThread = Thread { try { proc.waitFor() } catch (_: Exception) {} }
+                waitThread.start()
+                waitThread.join(3000)
+                if (waitThread.isAlive) {
                     proc.destroyForcibly() // 强制 SIGKILL
                     DebugLog.log("GO-CORE", "强制 SIGKILL")
                 }
