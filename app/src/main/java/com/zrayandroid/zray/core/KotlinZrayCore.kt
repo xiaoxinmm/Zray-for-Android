@@ -278,45 +278,44 @@ class KotlinZrayCore : IZrayCore {
     }
 
     private fun connectViaZrayOnce(atyp: Byte, rawAddr: ByteArray, targetPort: Int, targetHost: String): Socket {
-            val tcpSocket = Socket()
-            tcpSocket.connect(InetSocketAddress(remoteHost, remotePort), 10000)
-            tcpSocket.tcpNoDelay = true
+        val tcpSocket = Socket()
+        tcpSocket.connect(InetSocketAddress(remoteHost, remotePort), 10000)
+        tcpSocket.tcpNoDelay = true
 
-            val sslSocket = sslContext.socketFactory.createSocket(
-                tcpSocket, remoteHost, remotePort, true
-            ) as SSLSocket
-            sslSocket.startHandshake()
-            sslSocket.soTimeout = 30000
+        val sslSocket = sslContext.socketFactory.createSocket(
+            tcpSocket, remoteHost, remotePort, true
+        ) as SSLSocket
+        sslSocket.startHandshake()
+        sslSocket.soTimeout = 30000
 
-            val out = sslSocket.getOutputStream()
+        val out = sslSocket.getOutputStream()
 
-            // HTTP 伪装
-            writeHttpCamo(out)
-            // 协议头: ver(1) + ts(8) + nonce(8) + hash(16) = 33 bytes
-            val header = ByteArray(33)
-            header[0] = PROTOCOL_VERSION
-            ByteBuffer.wrap(header, 1, 8).putLong(System.currentTimeMillis() / 1000)
-            SecureRandom().nextBytes(header.sliceArray(9 until 17).also { System.arraycopy(it, 0, header, 9, 8) })
-            val nonce = ByteArray(8); SecureRandom().nextBytes(nonce)
-            System.arraycopy(nonce, 0, header, 9, 8)
-            System.arraycopy(userHash.toByteArray(Charsets.ISO_8859_1), 0, header, 17, minOf(userHash.length, 16))
-            out.write(header)
-            // padding
-            val padLen = 10 + (Math.random() * 50).toInt()
-            out.write(padLen)
-            val padding = ByteArray(padLen); SecureRandom().nextBytes(padding)
-            out.write(padding)
-            // CMD + 地址
-            out.write(CMD_CONNECT.toInt())
-            out.write(byteArrayOf((targetPort shr 8).toByte(), (targetPort and 0xFF).toByte()))
-            out.write(atyp.toInt())
-            out.write(rawAddr)
-            out.flush()
+        // HTTP 伪装
+        writeHttpCamo(out)
+        // 协议头: ver(1) + ts(8) + nonce(8) + hash(16) = 33 bytes
+        val header = ByteArray(33)
+        header[0] = PROTOCOL_VERSION
+        ByteBuffer.wrap(header, 1, 8).putLong(System.currentTimeMillis() / 1000)
+        SecureRandom().nextBytes(header.sliceArray(9 until 17).also { System.arraycopy(it, 0, header, 9, 8) })
+        val nonce = ByteArray(8); SecureRandom().nextBytes(nonce)
+        System.arraycopy(nonce, 0, header, 9, 8)
+        System.arraycopy(userHash.toByteArray(Charsets.ISO_8859_1), 0, header, 17, minOf(userHash.length, 16))
+        out.write(header)
+        // padding
+        val padLen = 10 + (Math.random() * 50).toInt()
+        out.write(padLen)
+        val padding = ByteArray(padLen); SecureRandom().nextBytes(padding)
+        out.write(padding)
+        // CMD + 地址
+        out.write(CMD_CONNECT.toInt())
+        out.write(byteArrayOf((targetPort shr 8).toByte(), (targetPort and 0xFF).toByte()))
+        out.write(atyp.toInt())
+        out.write(rawAddr)
+        out.flush()
 
-            DebugLog.log("PROXY", "Zray/TLS 隧道: $targetHost:$targetPort")
-            sslSocket.soTimeout = 0
-            return sslSocket
-        }
+        DebugLog.log("PROXY", "Zray/TLS 隧道: $targetHost:$targetPort")
+        sslSocket.soTimeout = 0
+        return sslSocket
     }
 
     private fun writeHttpCamo(out: OutputStream) {
