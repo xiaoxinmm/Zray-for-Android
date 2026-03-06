@@ -50,10 +50,10 @@ class KotlinZrayCore : IZrayCore {
     // 协程作用域，用于管理所有并发任务
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // 独立的 relay 调度器 — 允许高达 512 个并发阻塞线程，
+    // 独立的 relay 调度器 — 允许高达 256 个并发阻塞线程，
     // 避免 relay 操作耗尽共享 Dispatchers.IO 线程池（默认 64 线程），
     // 导致新连接排队、网络断连。
-    private val relayDispatcher = Dispatchers.IO.limitedParallelism(512)
+    private val relayDispatcher = Dispatchers.IO.limitedParallelism(256)
 
     private var remoteHost = ""
     private var remotePort = 64433
