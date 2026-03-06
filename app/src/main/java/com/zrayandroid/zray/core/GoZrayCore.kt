@@ -32,6 +32,7 @@ class GoZrayCore(private val context: Context) : IZrayCore {
     private var process: Process? = null
     private var latencyJob: Job? = null
     private var stdoutJob: Job? = null
+    private var watchdogJob: Job? = null
 
     // 协程作用域，用于管理子进程 I/O 读取
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -98,6 +99,9 @@ class GoZrayCore(private val context: Context) : IZrayCore {
 
                 // 4. 启动 stdout 读取（stderr 已合并）
                 stdoutJob = scope.launch { readStream(proc.inputStream.bufferedReader(), "GO-CORE") }
+
+                // 启动 Watchdog 协程：确保 Go 进程在 Android 进程退出时被清理
+                startWatchdog(proc)
 
                 // 5. 等待端口就绪（最多 10 秒）
                 val portReady = waitForPort(socksPort, timeoutMs = 10000)
@@ -168,6 +172,7 @@ class GoZrayCore(private val context: Context) : IZrayCore {
         process = null
         latencyJob?.cancel()
         stdoutJob?.cancel()
+        watchdogJob?.cancel()
     }
 
     override fun isRunning() = running
@@ -285,6 +290,41 @@ class GoZrayCore(private val context: Context) : IZrayCore {
                     latencyMs = -1
                 }
                 delay(5000)
+            }
+        }
+    }
+
+    /**
+     * Watchdog 协程：定期检查 Android 进程是否仍然存活。
+     * 如果 Android 进程即将被回收（通过检测进程状态），
+     * 确保 Go 子进程被强制终止，防止遗留僵尸进程耗电。
+     */
+    private fun startWatchdog(proc: Process) {
+        watchdogJob = scope.launch {
+            val myPid = android.os.Process.myPid()
+            DebugLog.log("GO-CORE", "Watchdog 启动, 监控 PID=$myPid")
+            try {
+                while (isActive && running && proc.isAlive) {
+                    delay(3000)
+                    // 检查 Android 进程是否还存在
+                    try {
+                        android.os.Process.getUidForPid(myPid)
+                    } catch (_: Exception) {
+                        // 进程可能已经被杀
+                        DebugLog.log("GO-CORE", "Watchdog 检测到父进程异常，强制清理子进程")
+                        proc.destroyForcibly()
+                        break
+                    }
+                }
+            } catch (_: CancellationException) {
+                // 正常取消
+            } catch (e: Exception) {
+                DebugLog.log("GO-CORE", "Watchdog 异常: ${e.message}")
+            }
+            // 最终保险：如果协程退出时子进程仍在运行，强制清理
+            if (proc.isAlive) {
+                DebugLog.log("GO-CORE", "Watchdog 退出时清理残留子进程")
+                proc.destroyForcibly()
             }
         }
     }
