@@ -137,6 +137,7 @@ object DebugLog {
                     ensureFileOpen()
                     log("LOG", "日志文件已清理")
                 }
+                Unit
             } catch (e: Exception) {
                 android.util.Log.e("DebugLog", "清理日志文件失败", e)
             }
