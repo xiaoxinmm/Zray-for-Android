@@ -146,7 +146,11 @@ object ZrayCoreMock {
                 0x04 -> {
                     val addr = ByteArray(16)
                     input.readFully(addr)
-                    addr.joinToString(":") { "%02x".format(it) }
+                    // 正确格式化 IPv6 地址
+                    val parts = (0 until 8).map { i ->
+                        "%x".format(((addr[i * 2].toInt() and 0xFF) shl 8) or (addr[i * 2 + 1].toInt() and 0xFF))
+                    }
+                    parts.joinToString(":")
                 }
                 else -> { client.close(); return }
             }
