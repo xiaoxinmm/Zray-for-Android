@@ -8,10 +8,13 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.zrayandroid.zray.MainActivity
 import com.zrayandroid.zray.R
-import com.zrayandroid.zray.core.ZrayCoreMock
 import com.zrayandroid.zray.core.DebugLog
 import kotlinx.coroutines.*
 
+/**
+ * 前台保活服务 — 仅维持通知和进程优先级。
+ * 核心启停由 ZrayCoreManager 统一管理，Service 不再直接操作核心。
+ */
 class ZrayService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -36,7 +39,6 @@ class ZrayService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                ZrayCoreMock.stop()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -55,18 +57,7 @@ class ZrayService : Service() {
         }
 
         scope.launch {
-            DebugLog.log("SERVICE", "前台服务启动, 端口: $socksPort")
-            // 核心已在 MainActivity 中启动，这里只做保活
-            // 不再重复调用 startAsync
-            if (ZrayCoreMock.isRunning) {
-                DebugLog.log("SERVICE", "核心已在运行中")
-            } else {
-                DebugLog.log("SERVICE", "核心未运行，启动中...")
-                ZrayCoreMock.startAsync(config, socksPort) { success, error ->
-                    if (success) DebugLog.log("SERVICE", "核心启动成功")
-                    else DebugLog.log("ERROR", "核心启动失败: $error")
-                }
-            }
+            DebugLog.log("SERVICE", "前台服务启动, 端口: $socksPort (纯保活模式)")
         }
 
         return START_STICKY
@@ -74,7 +65,6 @@ class ZrayService : Service() {
 
     override fun onDestroy() {
         DebugLog.log("SERVICE", "ZrayService onDestroy")
-        ZrayCoreMock.stop()
         scope.cancel()
         super.onDestroy()
     }

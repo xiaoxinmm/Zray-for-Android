@@ -123,10 +123,6 @@ fun ZrayApp(
     var showUpdateDialog by remember { mutableStateOf(false) }
     var selectedCoreType by remember { mutableStateOf(com.zrayandroid.zray.core.CoreType.KOTLIN_CORE) }
 
-    // 核心管理器（单例）
-    val coreManager = remember { com.zrayandroid.zray.core.ZrayCoreManager(context) }
-    var selectedCoreType by remember { mutableStateOf(com.zrayandroid.zray.core.CoreType.KOTLIN_CORE) }
-
     // 核心管理器（单例，跟随 Composable 生命周期）
     val coreManager = remember { com.zrayandroid.zray.core.ZrayCoreManager(context) }
 

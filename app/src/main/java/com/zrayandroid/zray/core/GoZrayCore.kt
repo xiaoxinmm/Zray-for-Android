@@ -324,20 +324,4 @@ class GoZrayCore(private val context: Context) : IZrayCore {
             } catch (_: Exception) { -1L }
         }
     }
-
-    /**
-     * Process.waitFor 带超时（兼容 API 26+）
-     */
-    private fun Process.waitFor(timeout: Long, unit: java.util.concurrent.TimeUnit): Boolean {
-        return try {
-            this.javaClass.getMethod("waitFor", Long::class.java, java.util.concurrent.TimeUnit::class.java)
-                .invoke(this, timeout, unit) as Boolean
-        } catch (_: Exception) {
-            // 回退：起一个线程等待
-            val thread = Thread { try { this.waitFor() } catch (_: Exception) {} }
-            thread.start()
-            thread.join(unit.toMillis(timeout))
-            !thread.isAlive
-        }
-    }
 }
