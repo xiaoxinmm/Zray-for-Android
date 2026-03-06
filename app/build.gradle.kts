@@ -53,6 +53,13 @@ android {
         jvmTarget = "17"
         freeCompilerArgs += listOf("-opt-in=androidx.compose.material3.ExperimentalMaterial3Api")
     }
+
+    packaging {
+        jniLibs {
+            // 必须解压 native libs，Go 核心需要作为子进程执行
+            useLegacyPackaging = true
+        }
+    }
 }
 
 dependencies {
