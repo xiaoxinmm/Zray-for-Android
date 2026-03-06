@@ -1,9 +1,15 @@
 package com.zrayandroid.zray.core
 
 import android.util.Base64
-import org.json.JSONObject
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import java.math.BigInteger
-import java.nio.ByteBuffer
 import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -16,6 +22,9 @@ import javax.crypto.spec.SecretKeySpec
 object ZALinkParser {
     private const val DEFAULT_KEY = "ZRaySecretKey!!!"
 
+    private val json = Json { ignoreUnknownKeys = true }
+
+    @Serializable
     data class LinkConfig(
         val host: String,
         val port: Int,
@@ -58,15 +67,15 @@ object ZALinkParser {
             return decodeBinary(data)
         }
 
-        // JSON 格式
-        val json = JSONObject(String(data))
+        // JSON 格式 — 使用 kotlinx.serialization 解析
+        val jsonObj = json.decodeFromString<JsonObject>(String(data))
         return LinkConfig(
-            host = json.optString("h", ""),
-            port = json.optInt("p", 64433),
-            userHash = json.optString("u", ""),
-            smartPort = json.optInt("s", 1080),
-            globalPort = json.optInt("g", 1081),
-            tfo = json.optBoolean("t", false)
+            host = jsonObj["h"]?.jsonPrimitive?.content ?: "",
+            port = jsonObj["p"]?.jsonPrimitive?.intOrNull ?: 64433,
+            userHash = jsonObj["u"]?.jsonPrimitive?.content ?: "",
+            smartPort = jsonObj["s"]?.jsonPrimitive?.intOrNull ?: 1080,
+            globalPort = jsonObj["g"]?.jsonPrimitive?.intOrNull ?: 1081,
+            tfo = jsonObj["t"]?.jsonPrimitive?.booleanOrNull ?: false
         )
     }
 
@@ -119,14 +128,16 @@ object ZALinkParser {
     private fun parseLegacyV1(body: String, key: String): LinkConfig {
         val encrypted = base26ToBytes(body)
         val data = decrypt(encrypted, deriveKey(key))
-        val json = JSONObject(String(data))
+
+        // 使用 kotlinx.serialization 解析 JSON
+        val jsonObj = json.decodeFromString<JsonObject>(String(data))
         return LinkConfig(
-            host = json.optString("h", ""),
-            port = json.optInt("p", 64433),
-            userHash = json.optString("u", ""),
-            smartPort = json.optInt("s", 1080),
-            globalPort = json.optInt("g", 1081),
-            tfo = json.optBoolean("t", false)
+            host = jsonObj["h"]?.jsonPrimitive?.content ?: "",
+            port = jsonObj["p"]?.jsonPrimitive?.intOrNull ?: 64433,
+            userHash = jsonObj["u"]?.jsonPrimitive?.content ?: "",
+            smartPort = jsonObj["s"]?.jsonPrimitive?.intOrNull ?: 1080,
+            globalPort = jsonObj["g"]?.jsonPrimitive?.intOrNull ?: 1081,
+            tfo = jsonObj["t"]?.jsonPrimitive?.booleanOrNull ?: false
         )
     }
 

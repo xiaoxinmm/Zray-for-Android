@@ -7,10 +7,12 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.zrayandroid.zray.ui.screens.Profile
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "zray_config")
+
+private val json = Json { ignoreUnknownKeys = true }
 
 object ProfileStore {
     private val PROFILES_KEY = stringPreferencesKey("profiles_json")
@@ -19,20 +21,9 @@ object ProfileStore {
     private val ALLOW_INSECURE_SSL_KEY = booleanPreferencesKey("allow_insecure_ssl")
 
     suspend fun saveProfiles(context: Context, profiles: List<Profile>, activeId: String?) {
-        val arr = JSONArray()
-        for (p in profiles) {
-            val obj = JSONObject().apply {
-                put("id", p.id)
-                put("name", p.name)
-                put("server", p.server)
-                put("port", p.port)
-                put("userHash", p.userHash)
-                put("link", p.link)
-            }
-            arr.put(obj)
-        }
+        val encoded = json.encodeToString(profiles)
         context.dataStore.edit { prefs ->
-            prefs[PROFILES_KEY] = arr.toString()
+            prefs[PROFILES_KEY] = encoded
             if (activeId != null) prefs[ACTIVE_ID_KEY] = activeId
             else prefs.remove(ACTIVE_ID_KEY)
         }
@@ -41,20 +32,14 @@ object ProfileStore {
 
     suspend fun loadProfiles(context: Context): Pair<List<Profile>, String?> {
         val prefs = context.dataStore.data.first()
-        val json = prefs[PROFILES_KEY] ?: return Pair(emptyList(), null)
+        val raw = prefs[PROFILES_KEY] ?: return Pair(emptyList(), null)
         val activeId = prefs[ACTIVE_ID_KEY]
-        val arr = JSONArray(json)
-        val profiles = mutableListOf<Profile>()
-        for (i in 0 until arr.length()) {
-            val obj = arr.getJSONObject(i)
-            profiles.add(Profile(
-                id = obj.getString("id"),
-                name = obj.optString("name", ""),
-                server = obj.optString("server", ""),
-                port = obj.optInt("port", 64433),
-                userHash = obj.optString("userHash", ""),
-                link = obj.optString("link", "")
-            ))
+        val profiles = try {
+            json.decodeFromString<List<Profile>>(raw)
+        } catch (e: Exception) {
+            DebugLog.log("STORE", "反序列化失败，尝试兼容旧格式: ${e.message}")
+            // 兼容旧 org.json 格式的迁移
+            parseLegacyProfiles(raw)
         }
         DebugLog.log("STORE", "加载 ${profiles.size} 个配置")
         return Pair(profiles, activeId)
@@ -75,5 +60,31 @@ object ProfileStore {
     /** 默认 true 以保持向后兼容（允许自签证书） */
     suspend fun loadAllowInsecureSsl(context: Context): Boolean {
         return context.dataStore.data.first()[ALLOW_INSECURE_SSL_KEY] ?: true
+    }
+
+    /**
+     * 兼容旧版 org.json 格式的 Profile 数据迁移。
+     * 使用 org.json 解析后转换为 Profile 对象。
+     */
+    private fun parseLegacyProfiles(raw: String): List<Profile> {
+        return try {
+            val arr = org.json.JSONArray(raw)
+            val profiles = mutableListOf<Profile>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                profiles.add(Profile(
+                    id = obj.getString("id"),
+                    name = obj.optString("name", ""),
+                    server = obj.optString("server", ""),
+                    port = obj.optInt("port", 64433),
+                    userHash = obj.optString("userHash", ""),
+                    link = obj.optString("link", "")
+                ))
+            }
+            profiles
+        } catch (e: Exception) {
+            DebugLog.log("STORE", "旧格式迁移也失败: ${e.message}")
+            emptyList()
+        }
     }
 }

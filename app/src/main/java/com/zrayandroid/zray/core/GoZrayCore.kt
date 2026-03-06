@@ -2,6 +2,10 @@ package com.zrayandroid.zray.core
 
 import android.content.Context
 import kotlinx.coroutines.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -206,10 +210,10 @@ class GoZrayCore(private val context: Context) : IZrayCore {
     private fun generateConfig(config: String, socksPort: Int): String {
         try {
             if (config.trimStart().startsWith("{")) {
-                val json = org.json.JSONObject(config)
-                remoteHost = json.optString("remote_host", "")
-                remotePort = json.optInt("remote_port", 64433)
-                val userHash = json.optString("user_hash", "")
+                val jsonObj = Json.decodeFromString<JsonObject>(config)
+                remoteHost = jsonObj["remote_host"]?.jsonPrimitive?.content ?: ""
+                remotePort = jsonObj["remote_port"]?.jsonPrimitive?.intOrNull ?: 64433
+                val userHash = jsonObj["user_hash"]?.jsonPrimitive?.content ?: ""
 
                 return """
                 {

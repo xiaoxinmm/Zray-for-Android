@@ -14,7 +14,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
+@Serializable
 data class Profile(
     val id: String,
     val name: String,
@@ -22,7 +25,7 @@ data class Profile(
     val port: Int = 64433,
     val userHash: String = "",
     val link: String = "",
-    val isActive: Boolean = false
+    @Transient val isActive: Boolean = false
 ) {
     fun toConfigJson(socksPort: Int): String = """
         {"smart_port":"127.0.0.1:$socksPort","global_port":"127.0.0.1:$socksPort","remote_host":"$server","remote_port":$port,"user_hash":"$userHash","geosite_path":"rules/geosite-cn.txt"}

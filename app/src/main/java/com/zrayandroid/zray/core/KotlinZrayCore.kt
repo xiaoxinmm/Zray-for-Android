@@ -1,6 +1,8 @@
 package com.zrayandroid.zray.core
 
 import kotlinx.coroutines.*
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
@@ -154,10 +156,10 @@ class KotlinZrayCore : IZrayCore {
     private fun parseConfig(config: String) {
         try {
             if (config.trimStart().startsWith("{")) {
-                val json = org.json.JSONObject(config)
-                remoteHost = json.optString("remote_host", "")
-                remotePort = json.optInt("remote_port", 64433)
-                userHash = json.optString("user_hash", "")
+                val jsonObj = kotlinx.serialization.json.Json.decodeFromString<kotlinx.serialization.json.JsonObject>(config)
+                remoteHost = jsonObj["remote_host"]?.jsonPrimitive?.content ?: ""
+                remotePort = jsonObj["remote_port"]?.jsonPrimitive?.intOrNull ?: 64433
+                userHash = jsonObj["user_hash"]?.jsonPrimitive?.content ?: ""
             } else {
                 val cleaned = config.trim()
                     .removePrefix("zray://").removePrefix("socks5://").removePrefix("socks://")
