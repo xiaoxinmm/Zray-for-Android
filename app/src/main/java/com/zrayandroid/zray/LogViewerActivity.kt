@@ -65,6 +65,9 @@ private fun LogViewerScreen(onBack: () -> Unit) {
     // 选项卡状态: 0=实时日志, 1=文件日志
     var selectedTab by remember { mutableIntStateOf(0) }
     var fileLogContent by remember { mutableStateOf("") }
+    // 追踪日志文件变化（清理后刷新）
+    var logFilesVersion by remember { mutableIntStateOf(0) }
+    val logFiles = remember(logFilesVersion) { DebugLog.getLogFiles() }
     var showClearDialog by remember { mutableStateOf(false) }
 
     // 自动滚动到底部（仅实时日志 tab）
@@ -151,7 +154,6 @@ private fun LogViewerScreen(onBack: () -> Unit) {
             }
 
             // 日志文件信息
-            val logFiles = remember { DebugLog.getLogFiles() }
             if (logFiles.isNotEmpty()) {
                 val totalSize = logFiles.sumOf { it.length() }
                 Text(
@@ -239,6 +241,7 @@ private fun LogViewerScreen(onBack: () -> Unit) {
                     onClick = {
                         DebugLog.clearLogFiles()
                         fileLogContent = ""
+                        logFilesVersion++  // 刷新文件列表显示
                         showClearDialog = false
                         Toast.makeText(context, "日志已清理", Toast.LENGTH_SHORT).show()
                     }

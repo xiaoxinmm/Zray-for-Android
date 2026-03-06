@@ -26,17 +26,22 @@ object DebugLog {
     private var fileWriter: FileWriter? = null
     private var currentDate: String = ""
 
+    /** 文件操作锁，保护 fileWriter 的并发访问 */
+    private val fileLock = Any()
+
     /** 调试模式开关：开启后日志写入文件，关闭后仅内存日志 */
     @Volatile
     var debugMode: Boolean = false
         set(value) {
             field = value
-            if (value) {
-                // 开启时确保文件已打开
-                ensureFileOpen()
-            } else {
-                // 关闭时释放文件写入器
-                closeFileWriter()
+            synchronized(fileLock) {
+                if (value) {
+                    // 开启时确保文件已打开
+                    ensureFileOpen()
+                } else {
+                    // 关闭时释放文件写入器
+                    closeFileWriter()
+                }
             }
         }
 
@@ -123,32 +128,36 @@ object DebugLog {
      * 清理所有日志文件
      */
     fun clearLogFiles() {
-        try {
-            closeFileWriter()
-            logDir?.listFiles()?.forEach { it.delete() }
-            _logs.value = emptyList()
-            if (debugMode) {
-                ensureFileOpen()
-                log("LOG", "日志文件已清理")
+        synchronized(fileLock) {
+            try {
+                closeFileWriter()
+                logDir?.listFiles()?.forEach { it.delete() }
+                _logs.value = emptyList()
+                if (debugMode) {
+                    ensureFileOpen()
+                    log("LOG", "日志文件已清理")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("DebugLog", "清理日志文件失败", e)
             }
-        } catch (e: Exception) {
-            android.util.Log.e("DebugLog", "清理日志文件失败", e)
         }
     }
 
     private fun writeToFile(line: String) {
-        try {
-            val today = dateFmt.format(Date())
-            if (today != currentDate) {
-                rotateFile()
+        synchronized(fileLock) {
+            try {
+                val today = dateFmt.format(Date())
+                if (today != currentDate) {
+                    rotateFile()
+                }
+                fileWriter?.apply {
+                    write(line)
+                    write("\n")
+                    flush()
+                }
+            } catch (e: Exception) {
+                // 文件写入失败不影响主流程
             }
-            fileWriter?.apply {
-                write(line)
-                write("\n")
-                flush()
-            }
-        } catch (e: Exception) {
-            // 文件写入失败不影响主流程
         }
     }
 
