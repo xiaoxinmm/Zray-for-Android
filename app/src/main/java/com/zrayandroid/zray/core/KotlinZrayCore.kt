@@ -1,0 +1,355 @@
+package com.zrayandroid.zray.core
+
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.nio.ByteBuffer
+import java.security.SecureRandom
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
+import kotlin.concurrent.thread
+
+/**
+ * Kotlin 原生核心 — 纯 JVM 实现的 Zray 协议客户端。
+ *
+ * 协议流程: TCP → TLS 握手 → HTTP 伪装 → Zray 头(ver+ts+nonce+hash) → padding → CMD+地址 → relay
+ * 优点: 无需 native 二进制，兼容性好，包体积小
+ * 缺点: 无 uTLS 指纹伪装（Java SSLSocket 指纹特征明显）
+ */
+class KotlinZrayCore : IZrayCore {
+
+    override val coreType = CoreType.KOTLIN_CORE
+
+    companion object {
+        private const val PROTOCOL_VERSION: Byte = 0x01
+        private const val CMD_CONNECT: Byte = 0x01
+    }
+
+    @Volatile private var running = false
+    @Volatile private var latencyMs: Long = -1
+    @Volatile private var currentSocksPort = 0
+
+    private var serverSocket: ServerSocket? = null
+    private var latencyThread: Thread? = null
+
+    private var remoteHost = ""
+    private var remotePort = 64433
+    private var userHash = ""
+
+    // 信任所有证书（自签证书）
+    private val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+        override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
+        override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+    })
+
+    private val sslContext: SSLContext by lazy {
+        SSLContext.getInstance("TLS").apply {
+            init(null, trustAllCerts, SecureRandom())
+        }
+    }
+
+    override fun start(config: String, socksPort: Int, onResult: (Boolean, String?) -> Unit) {
+        DebugLog.log("KOTLIN-CORE", "启动, isRunning=$running, port=$socksPort")
+
+        // 强制清理旧实例
+        if (running || serverSocket != null) {
+            DebugLog.log("KOTLIN-CORE", "清理旧实例")
+            stop()
+            try { Thread.sleep(100) } catch (_: Exception) {}
+        }
+
+        // 解析配置
+        parseConfig(config)
+        currentSocksPort = socksPort
+
+        // 确保 userHash 16 字节
+        if (userHash.length > 16) userHash = userHash.substring(0, 16)
+        while (userHash.length < 16) userHash += "\u0000"
+
+        DebugLog.log("KOTLIN-CORE", "远程: $remoteHost:$remotePort")
+
+        thread(name = "kotlin-core-listen") {
+            try {
+                val ss = ServerSocket()
+                ss.reuseAddress = true
+                ss.bind(InetSocketAddress("127.0.0.1", socksPort))
+                serverSocket = ss
+                running = true
+
+                DebugLog.log("KOTLIN-CORE", "SOCKS5 监听成功: 127.0.0.1:$socksPort")
+                onResult(true, null)
+
+                startLatencyProbe()
+
+                // accept 循环
+                while (running && !Thread.currentThread().isInterrupted) {
+                    try {
+                        val client = ss.accept()
+                        thread(name = "kt-conn") { handleSocks5(client) }
+                    } catch (e: Exception) {
+                        if (running) DebugLog.log("KOTLIN-CORE", "accept: ${e.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                val msg = "端口 $socksPort 启动失败: ${e.message}"
+                DebugLog.log("ERROR", msg)
+                running = false
+                onResult(false, msg)
+            }
+        }
+    }
+
+    override fun stop() {
+        if (!running && serverSocket == null) return
+        DebugLog.log("KOTLIN-CORE", "停止")
+        running = false
+        latencyMs = -1
+        TrafficStats.reset()
+        try { serverSocket?.close() } catch (_: Exception) {}
+        serverSocket = null
+        latencyThread?.interrupt()
+        latencyThread = null
+    }
+
+    override fun isRunning() = running
+    override fun getLatency() = latencyMs
+
+    override fun getStatus() = CoreStatus(
+        running = running,
+        coreType = CoreType.KOTLIN_CORE,
+        socksPort = currentSocksPort,
+        latencyMs = latencyMs,
+        remoteHost = remoteHost,
+        remotePort = remotePort
+    )
+
+    // ==================== 私有方法 ====================
+
+    private fun parseConfig(config: String) {
+        try {
+            if (config.trimStart().startsWith("{")) {
+                val json = org.json.JSONObject(config)
+                remoteHost = json.optString("remote_host", "")
+                remotePort = json.optInt("remote_port", 64433)
+                userHash = json.optString("user_hash", "")
+            } else {
+                val cleaned = config.trim()
+                    .removePrefix("zray://").removePrefix("socks5://").removePrefix("socks://")
+                val parts = cleaned.split(":")
+                if (parts.size >= 2) {
+                    remoteHost = parts[0]
+                    remotePort = parts[1].toIntOrNull() ?: 64433
+                    if (parts.size >= 3) userHash = parts[2]
+                }
+            }
+        } catch (e: Exception) {
+            DebugLog.log("KOTLIN-CORE", "配置解析异常: ${e.message}")
+        }
+    }
+
+    private fun handleSocks5(client: Socket) {
+        try {
+            client.soTimeout = 30000
+            val input = client.getInputStream()
+            val output = client.getOutputStream()
+
+            // SOCKS5 握手
+            val ver = input.read()
+            if (ver != 5) { client.close(); return }
+            val nMethods = input.read()
+            if (nMethods <= 0 || nMethods > 255) { client.close(); return }
+            val methods = ByteArray(nMethods)
+            input.readFully(methods)
+            output.write(byteArrayOf(0x05, 0x00))
+            output.flush()
+
+            // SOCKS5 请求
+            input.read() // VER
+            val cmd = input.read()
+            input.read() // RSV
+            val atyp = input.read()
+
+            val targetHost: String
+            val rawAddrBytes: ByteArray
+
+            when (atyp) {
+                0x01 -> {
+                    val addr = ByteArray(4)
+                    input.readFully(addr)
+                    rawAddrBytes = addr
+                    targetHost = addr.joinToString(".") { (it.toInt() and 0xFF).toString() }
+                }
+                0x03 -> {
+                    val len = input.read()
+                    val domain = ByteArray(len)
+                    input.readFully(domain)
+                    rawAddrBytes = byteArrayOf(len.toByte()) + domain
+                    targetHost = String(domain)
+                }
+                0x04 -> {
+                    val addr = ByteArray(16)
+                    input.readFully(addr)
+                    rawAddrBytes = addr
+                    val parts = (0 until 8).map { i ->
+                        "%x".format(((addr[i * 2].toInt() and 0xFF) shl 8) or (addr[i * 2 + 1].toInt() and 0xFF))
+                    }
+                    targetHost = parts.joinToString(":")
+                }
+                else -> { client.close(); return }
+            }
+
+            val portHi = input.read()
+            val portLo = input.read()
+            val targetPort = (portHi shl 8) or portLo
+
+            if (cmd != 0x01) {
+                output.write(byteArrayOf(0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                output.flush(); client.close(); return
+            }
+
+            DebugLog.log("PROXY", "→ $targetHost:$targetPort (Kotlin/TLS)")
+
+            // Zray 协议连接远程
+            val remote = connectViaZray(atyp.toByte(), rawAddrBytes, targetPort, targetHost)
+            if (remote == null) {
+                output.write(byteArrayOf(0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+                output.flush(); client.close(); return
+            }
+
+            output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0))
+            output.flush()
+
+            // 双向 relay（带流量统计）
+            TrafficStats.activeConns.incrementAndGet()
+            val remoteIn = remote.getInputStream()
+            val remoteOut = remote.getOutputStream()
+            val t1 = thread(name = "relay-up") {
+                try { relayWithStats(client.getInputStream(), remoteOut, true) } catch (_: Exception) {}
+                try { remote.close() } catch (_: Exception) {}
+                try { client.close() } catch (_: Exception) {}
+            }
+            val t2 = thread(name = "relay-down") {
+                try { relayWithStats(remoteIn, client.getOutputStream(), false) } catch (_: Exception) {}
+                try { remote.close() } catch (_: Exception) {}
+                try { client.close() } catch (_: Exception) {}
+            }
+            t1.join(); t2.join()
+            TrafficStats.activeConns.decrementAndGet()
+        } catch (e: Exception) {
+            DebugLog.log("ERROR", "SOCKS5: ${e.message}")
+        } finally {
+            try { client.close() } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Zray 协议隧道: TLS → HTTP伪装 → 协议头 → padding → CMD+地址
+     */
+    private fun connectViaZray(atyp: Byte, rawAddr: ByteArray, targetPort: Int, targetHost: String): Socket? {
+        return try {
+            val tcpSocket = Socket()
+            tcpSocket.connect(InetSocketAddress(remoteHost, remotePort), 10000)
+            tcpSocket.tcpNoDelay = true
+
+            val sslSocket = sslContext.socketFactory.createSocket(
+                tcpSocket, remoteHost, remotePort, true
+            ) as SSLSocket
+            sslSocket.startHandshake()
+            sslSocket.soTimeout = 30000
+
+            val out = sslSocket.getOutputStream()
+
+            // HTTP 伪装
+            writeHttpCamo(out)
+            // 协议头: ver(1) + ts(8) + nonce(8) + hash(16) = 33 bytes
+            val header = ByteArray(33)
+            header[0] = PROTOCOL_VERSION
+            ByteBuffer.wrap(header, 1, 8).putLong(System.currentTimeMillis() / 1000)
+            SecureRandom().nextBytes(header.sliceArray(9 until 17).also { System.arraycopy(it, 0, header, 9, 8) })
+            val nonce = ByteArray(8); SecureRandom().nextBytes(nonce)
+            System.arraycopy(nonce, 0, header, 9, 8)
+            System.arraycopy(userHash.toByteArray(Charsets.ISO_8859_1), 0, header, 17, minOf(userHash.length, 16))
+            out.write(header)
+            // padding
+            val padLen = 10 + (Math.random() * 50).toInt()
+            out.write(padLen)
+            val padding = ByteArray(padLen); SecureRandom().nextBytes(padding)
+            out.write(padding)
+            // CMD + 地址
+            out.write(CMD_CONNECT.toInt())
+            out.write(byteArrayOf((targetPort shr 8).toByte(), (targetPort and 0xFF).toByte()))
+            out.write(atyp.toInt())
+            out.write(rawAddr)
+            out.flush()
+
+            DebugLog.log("PROXY", "Zray/TLS 隧道: $targetHost:$targetPort")
+            sslSocket.soTimeout = 0
+            sslSocket
+        } catch (e: Exception) {
+            DebugLog.log("ERROR", "Zray 连接异常: ${e.message}")
+            null
+        }
+    }
+
+    private fun writeHttpCamo(out: OutputStream) {
+        val paths = listOf("/", "/index.html", "/api/v1/status", "/search?q=keyword",
+            "/blog/2024/01/welcome", "/static/css/main.css", "/ws", "/login",
+            "/cdn-cgi/trace", "/favicon.ico", "/robots.txt")
+        val path = paths.random()
+        val sb = StringBuilder()
+        sb.append("GET $path HTTP/1.1\r\n")
+        sb.append("Host: $remoteHost\r\n")
+        sb.append("Connection: keep-alive\r\nCache-Control: max-age=0\r\n")
+        sb.append("sec-ch-ua: \"Chromium\";v=\"122\", \"Not(A:Brand\";v=\"24\"\r\n")
+        sb.append("sec-ch-ua-mobile: ?0\r\nsec-ch-ua-platform: \"Windows\"\r\n")
+        sb.append("Upgrade-Insecure-Requests: 1\r\n")
+        sb.append("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36\r\n")
+        sb.append("Accept: text/html,application/xhtml+xml,*/*;q=0.8\r\n")
+        sb.append("Accept-Encoding: gzip, deflate, br\r\nAccept-Language: en-US,en;q=0.9\r\n\r\n")
+        out.write(sb.toString().toByteArray())
+    }
+
+    private fun startLatencyProbe() {
+        latencyThread = thread(name = "kt-latency", isDaemon = true) {
+            while (running) {
+                try {
+                    if (remoteHost.isNotEmpty()) {
+                        val start = System.currentTimeMillis()
+                        val sock = Socket()
+                        sock.connect(InetSocketAddress(remoteHost, remotePort), 5000)
+                        latencyMs = System.currentTimeMillis() - start
+                        sock.close()
+                        DebugLog.log("LATENCY", "${latencyMs}ms → $remoteHost:$remotePort")
+                    }
+                } catch (_: Exception) { latencyMs = -1 }
+                try { Thread.sleep(5000) } catch (_: InterruptedException) { break }
+            }
+        }
+    }
+
+    private fun relayWithStats(input: InputStream, output: OutputStream, isUpload: Boolean) {
+        val buf = ByteArray(32 * 1024)
+        val counter = if (isUpload) TrafficStats.uploadBytes else TrafficStats.downloadBytes
+        while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            output.write(buf, 0, n)
+            output.flush()
+            counter.addAndGet(n.toLong())
+        }
+    }
+
+    private fun InputStream.readFully(buf: ByteArray) {
+        var offset = 0
+        while (offset < buf.size) {
+            val n = read(buf, offset, buf.size - offset)
+            if (n < 0) throw java.io.EOFException()
+            offset += n
+        }
+    }
+}

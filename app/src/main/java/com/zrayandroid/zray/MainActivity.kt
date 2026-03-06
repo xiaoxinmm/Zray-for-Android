@@ -121,6 +121,14 @@ fun ZrayApp(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var updateInfo by remember { mutableStateOf<com.zrayandroid.zray.core.UpdateChecker.UpdateInfo?>(null) }
     var showUpdateDialog by remember { mutableStateOf(false) }
+    var selectedCoreType by remember { mutableStateOf(com.zrayandroid.zray.core.CoreType.KOTLIN_CORE) }
+
+    // 核心管理器（单例）
+    val coreManager = remember { com.zrayandroid.zray.core.ZrayCoreManager(context) }
+    var selectedCoreType by remember { mutableStateOf(com.zrayandroid.zray.core.CoreType.KOTLIN_CORE) }
+
+    // 核心管理器（单例，跟随 Composable 生命周期）
+    val coreManager = remember { com.zrayandroid.zray.core.ZrayCoreManager(context) }
 
     // 启动时检查更新
     LaunchedEffect(Unit) {
@@ -202,7 +210,7 @@ fun ZrayApp(
                     var totalDown by remember { mutableStateOf(0L) }
                     LaunchedEffect(isConnected) {
                         while (isConnected) {
-                            latency = com.zrayandroid.zray.core.ZrayCoreMock.latencyMs
+                            latency = coreManager.getLatency()
                             com.zrayandroid.zray.core.TrafficStats.tick()
                             upSpeed = com.zrayandroid.zray.core.TrafficStats.uploadSpeed
                             downSpeed = com.zrayandroid.zray.core.TrafficStats.downloadSpeed
@@ -223,7 +231,7 @@ fun ZrayApp(
                         onToggle = {
                             if (isConnecting) return@HomeScreen
                             if (isConnected) {
-                                com.zrayandroid.zray.core.ZrayCoreMock.stop()
+                                coreManager.stop()
                                 onStopService()
                                 isConnected = false
                                 DebugLog.log("UI", "用户点击断开")
@@ -237,30 +245,20 @@ fun ZrayApp(
                                     DebugLog.log("UI", "配置为空，无法启动")
                                     return@HomeScreen
                                 }
-                                // 尝试连接
+                                // 通过 CoreManager 启动
                                 isConnecting = true
-                                DebugLog.log("UI", "尝试连接: ${activeProfile.name}")
+                                DebugLog.log("UI", "尝试连接: ${activeProfile.name} (${coreManager.selectedCoreType.displayName})")
                                 
-                                scope.launch {
-                                    // 先停旧核心（不停Service，避免闪退）
-                                    com.zrayandroid.zray.core.ZrayCoreMock.stop()
-                                    kotlinx.coroutines.delay(200)
-                                    
-                                    // 异步启动核心
-                                    com.zrayandroid.zray.core.ZrayCoreMock.startAsync(config, socksPort) { success, error ->
-                                        scope.launch(kotlinx.coroutines.Dispatchers.Main) {
-                                            isConnecting = false
-                                            if (success) {
-                                                isConnected = true
-                                                // 核心成功后再启动前台服务保活
-                                                onStartService(config, socksPort)
-                                                DebugLog.log("UI", "连接成功")
-                                            } else {
-                                                isConnected = false
-                                                errorMessage = error ?: "连接失败"
-                                                DebugLog.log("ERROR", "连接失败: $error")
-                                            }
-                                        }
+                                coreManager.start(config, socksPort) { success, error ->
+                                    isConnecting = false
+                                    if (success) {
+                                        isConnected = true
+                                        onStartService(config, socksPort)
+                                        DebugLog.log("UI", "连接成功")
+                                    } else {
+                                        isConnected = false
+                                        errorMessage = error ?: "连接失败"
+                                        DebugLog.log("ERROR", "连接失败: $error")
                                     }
                                 }
                             }
@@ -316,7 +314,21 @@ fun ZrayApp(
                         onDebugToggle = {
                             debugEnabled = it
                             DebugLog.log("SETTINGS", "Debug ${if (it) "开启" else "关闭"}")
-                        }
+                        },
+                        selectedCoreType = selectedCoreType,
+                        onCoreTypeChange = { type ->
+                            if (isConnected) {
+                                errorMessage = "请先断开连接再切换核心"
+                                return@SettingsScreen
+                            }
+                            selectedCoreType = type
+                            coreManager.switchCore(type) { error ->
+                                if (error != null) errorMessage = error
+                            }
+                            DebugLog.log("SETTINGS", "核心切换为: ${type.displayName}")
+                        },
+                        isGoCoreAvailable = coreManager.isGoCoreAvailable(),
+                        goBinaryPath = coreManager.getGoBinaryPath()
                     )
                 }
             }
