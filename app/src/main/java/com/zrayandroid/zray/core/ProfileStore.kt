@@ -19,6 +19,24 @@ object ProfileStore {
     private val ACTIVE_ID_KEY = stringPreferencesKey("active_profile_id")
     private val SOCKS_PORT_KEY = intPreferencesKey("socks_port")
     private val ALLOW_INSECURE_SSL_KEY = booleanPreferencesKey("allow_insecure_ssl")
+    private val DNS_PROTOCOL_KEY = stringPreferencesKey("dns_protocol")
+    private val DNS_SERVER_KEY = stringPreferencesKey("dns_server")
+
+    suspend fun saveDnsConfig(context: Context, protocol: DnsProtocol, server: String) {
+        context.dataStore.edit {
+            it[DNS_PROTOCOL_KEY] = protocol.name
+            it[DNS_SERVER_KEY] = server
+        }
+    }
+
+    suspend fun loadDnsProtocol(context: Context): DnsProtocol {
+        val name = context.dataStore.data.first()[DNS_PROTOCOL_KEY] ?: DnsProtocol.DOH.name
+        return try { DnsProtocol.valueOf(name) } catch (_: Exception) { DnsProtocol.DOH }
+    }
+
+    suspend fun loadDnsServer(context: Context): String {
+        return context.dataStore.data.first()[DNS_SERVER_KEY] ?: "https://dns.alidns.com/dns-query"
+    }
 
     suspend fun saveProfiles(context: Context, profiles: List<Profile>, activeId: String?) {
         val encoded = json.encodeToString(profiles)

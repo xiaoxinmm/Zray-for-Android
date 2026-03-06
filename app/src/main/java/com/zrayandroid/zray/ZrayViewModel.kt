@@ -51,6 +51,13 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
     private val _allowInsecureSsl = MutableStateFlow(true)
     val allowInsecureSsl: StateFlow<Boolean> = _allowInsecureSsl.asStateFlow()
 
+    // ==================== DNS 配置 ====================
+    private val _dnsProtocol = MutableStateFlow(DnsProtocol.DOH)
+    val dnsProtocol: StateFlow<DnsProtocol> = _dnsProtocol.asStateFlow()
+
+    private val _dnsServer = MutableStateFlow("https://dns.alidns.com/dns-query")
+    val dnsServer: StateFlow<String> = _dnsServer.asStateFlow()
+
     // ==================== 路由 ====================
     private val _routingConfig = MutableStateFlow(RoutingConfig())
     val routingConfig: StateFlow<RoutingConfig> = _routingConfig.asStateFlow()
@@ -108,6 +115,13 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
             _socksPort.value = savedPort
             _allowInsecureSsl.value = savedInsecureSsl
             coreManager.allowInsecureSsl = savedInsecureSsl
+            // DNS 配置
+            val savedDnsProtocol = ProfileStore.loadDnsProtocol(context)
+            val savedDnsServer = ProfileStore.loadDnsServer(context)
+            _dnsProtocol.value = savedDnsProtocol
+            _dnsServer.value = savedDnsServer
+            ZrayDnsResolver.protocol = savedDnsProtocol
+            ZrayDnsResolver.server = savedDnsServer
             _loaded.value = true
             DebugLog.log("APP", "本地配置加载完成: ${savedProfiles.size} 个节点")
         }
@@ -175,6 +189,24 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
             ProfileStore.saveAllowInsecureSsl(context, allow)
         }
         DebugLog.log("SETTINGS", "SSL 不安全证书: ${if (allow) "允许" else "禁止"}")
+    }
+
+    fun setDnsProtocol(protocol: DnsProtocol) {
+        _dnsProtocol.value = protocol
+        ZrayDnsResolver.protocol = protocol
+        viewModelScope.launch {
+            ProfileStore.saveDnsConfig(context, protocol, _dnsServer.value)
+        }
+        DebugLog.log("SETTINGS", "DNS 协议: ${protocol.name}")
+    }
+
+    fun setDnsServer(server: String) {
+        _dnsServer.value = server
+        ZrayDnsResolver.server = server
+        viewModelScope.launch {
+            ProfileStore.saveDnsConfig(context, _dnsProtocol.value, server)
+        }
+        DebugLog.log("SETTINGS", "DNS 服务器: $server")
     }
 
     fun switchCoreType(type: CoreType) {

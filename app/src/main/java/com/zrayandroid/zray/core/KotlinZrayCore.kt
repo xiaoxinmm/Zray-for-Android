@@ -312,9 +312,18 @@ class KotlinZrayCore : IZrayCore {
         return null
     }
 
-    private fun connectViaZrayOnce(atyp: Byte, rawAddr: ByteArray, targetPort: Int, targetHost: String): Socket {
+    private suspend fun connectViaZrayOnce(atyp: Byte, rawAddr: ByteArray, targetPort: Int, targetHost: String): Socket {
+        // 如果 remoteHost 是域名，使用安全 DNS 解析获取纯净 IP，防止 DNS 污染
+        val resolvedHost = if (remoteHost.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}$"))) {
+            remoteHost
+        } else {
+            val ip = ZrayDnsResolver.resolveHost(remoteHost)
+            DebugLog.log("PROXY", "节点域名解析: $remoteHost → $ip")
+            ip
+        }
+
         val tcpSocket = Socket()
-        tcpSocket.connect(InetSocketAddress(remoteHost, remotePort), 10000)
+        tcpSocket.connect(InetSocketAddress(resolvedHost, remotePort), 10000)
         tcpSocket.tcpNoDelay = true
 
         val sslCtx = buildSslContext()

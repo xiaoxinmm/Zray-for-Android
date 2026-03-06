@@ -13,6 +13,7 @@ import com.zrayandroid.zray.MainActivity
 import com.zrayandroid.zray.R
 import com.zrayandroid.zray.core.DebugLog
 import com.zrayandroid.zray.core.ProxyMode
+import com.zrayandroid.zray.core.ZrayDnsResolver
 import kotlinx.coroutines.*
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -108,6 +109,10 @@ class ZrayVpnService : VpnService() {
         running.set(true)
         isRunning.set(true)
 
+        // 设置 DNS Resolver 的 socket 保护回调，防止 DNS 查询走 VPN 通道
+        ZrayDnsResolver.protectSocket = { ds -> protect(ds) }
+        ZrayDnsResolver.protectSocketFd = { s -> protect(s) }
+
         val notif = buildNotification("Zray VPN 运行中")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notif, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -123,6 +128,8 @@ class ZrayVpnService : VpnService() {
         if (!running.getAndSet(false)) return
         DebugLog.log("VPN", "停止 VPN")
         isRunning.set(false)
+        ZrayDnsResolver.protectSocket = null
+        ZrayDnsResolver.protectSocketFd = null
         tcpSessions.values.forEach { it.close() }
         tcpSessions.clear()
         udpSessions.values.forEach { it.close() }
@@ -310,9 +317,10 @@ class ZrayVpnService : VpnService() {
     /**
      * 处理 UDP 流量。
      *
-     * 策略：DNS（端口 53）等非代理端口直接转发；
-     * QUIC/HTTP（端口 443、80）因无法通过 SOCKS5 代理，
-     * 返回 ICMP Port Unreachable 强制 App 回退到 TCP 走代理通道。
+     * 策略：
+     * - DNS（端口 53）：拦截并通过 ZrayDnsResolver 进行 DoH/DoT/UDP 解析
+     * - QUIC/HTTP（端口 443、80）：返回 ICMP Port Unreachable 强制 App 回退到 TCP 走代理通道
+     * - 其他端口：直接 UDP 转发
      */
     private fun handleUdp(pkt: ByteBuffer, ihl: Int, srcIp: String, dstIp: String, out: FileOutputStream) {
         if (pkt.limit() < ihl + 8) return
@@ -336,6 +344,24 @@ class ZrayVpnService : VpnService() {
         val payload = ByteArray(payLen)
         System.arraycopy(pkt.array(), payStart, payload, 0, payLen)
 
+        // DNS 流量（端口 53）通过 ZrayDnsResolver 处理
+        if (dstPort == 53) {
+            scope.launch {
+                try {
+                    val response = ZrayDnsResolver.resolveRaw(payload)
+                    if (response != null) {
+                        // 构造 DNS 响应包（源/目对调）写回 TUN
+                        val udpResp = buildUdpPacket(dstIp, srcIp, dstPort, srcPort, response)
+                        if (udpResp != null) synchronized(out) { out.write(udpResp); out.flush() }
+                    }
+                } catch (e: Exception) {
+                    if (running.get()) DebugLog.log("VPN", "DNS 解析失败 → $dstIp: ${e.message}")
+                }
+            }
+            return
+        }
+
+        // 非 DNS 的 UDP 流量：使用 Session 机制直接转发
         // 会话 Key：srcPort + dstIp(numeric) + dstPort 的组合，避免 hashCode 碰撞
         val ipParts = dstIp.split(".")
         val ipNumeric = if (ipParts.size == 4) {

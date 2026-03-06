@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.zrayandroid.zray.core.CoreType
+import com.zrayandroid.zray.core.DnsProtocol
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -28,10 +29,16 @@ fun SettingsScreen(
     goBinaryPath: String = "",
     allowInsecureSsl: Boolean = true,
     onInsecureSslToggle: (Boolean) -> Unit = {},
+    dnsProtocol: DnsProtocol = DnsProtocol.DOH,
+    onDnsProtocolChange: (DnsProtocol) -> Unit = {},
+    dnsServer: String = "https://dns.alidns.com/dns-query",
+    onDnsServerChange: (String) -> Unit = {},
     onOpenLogViewer: () -> Unit = {}
 ) {
     var portText by remember { mutableStateOf(socksPort.toString()) }
     var showAbout by remember { mutableStateOf(false) }
+    var dnsServerText by remember { mutableStateOf(dnsServer) }
+    var dnsExpanded by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -114,6 +121,123 @@ fun SettingsScreen(
                 )
                 Text(
                     "监听地址: 127.0.0.1:$portText",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ===== DNS 设置 =====
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("DNS 设置", style = MaterialTheme.typography.titleSmall)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "选择 DNS 解析协议和服务器，防止 DNS 污染",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // DNS 协议选择
+                ExposedDropdownMenuBox(
+                    expanded = dnsExpanded,
+                    onExpandedChange = { dnsExpanded = !dnsExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = when (dnsProtocol) {
+                            DnsProtocol.UDP -> "UDP (传统 DNS)"
+                            DnsProtocol.DOH -> "DoH (DNS over HTTPS)"
+                            DnsProtocol.DOT -> "DoT (DNS over TLS)"
+                        },
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("协议") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = dnsExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = dnsExpanded,
+                        onDismissRequest = { dnsExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("UDP (传统 DNS)") },
+                            onClick = {
+                                onDnsProtocolChange(DnsProtocol.UDP)
+                                dnsServerText = "8.8.8.8"
+                                onDnsServerChange("8.8.8.8")
+                                dnsExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("DoH (DNS over HTTPS)") },
+                            onClick = {
+                                onDnsProtocolChange(DnsProtocol.DOH)
+                                dnsServerText = "https://dns.alidns.com/dns-query"
+                                onDnsServerChange("https://dns.alidns.com/dns-query")
+                                dnsExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("DoT (DNS over TLS)") },
+                            onClick = {
+                                onDnsProtocolChange(DnsProtocol.DOT)
+                                dnsServerText = "1.1.1.1"
+                                onDnsServerChange("1.1.1.1")
+                                dnsExpanded = false
+                            }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // DNS 服务器地址
+                OutlinedTextField(
+                    value = dnsServerText,
+                    onValueChange = {
+                        dnsServerText = it
+                        onDnsServerChange(it)
+                    },
+                    label = {
+                        Text(
+                            when (dnsProtocol) {
+                                DnsProtocol.UDP -> "DNS 服务器 IP"
+                                DnsProtocol.DOH -> "DoH URL"
+                                DnsProtocol.DOT -> "DoT 服务器 (IP:853)"
+                            }
+                        )
+                    },
+                    placeholder = {
+                        Text(
+                            when (dnsProtocol) {
+                                DnsProtocol.UDP -> "8.8.8.8"
+                                DnsProtocol.DOH -> "https://dns.alidns.com/dns-query"
+                                DnsProtocol.DOT -> "1.1.1.1"
+                            }
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                Text(
+                    when (dnsProtocol) {
+                        DnsProtocol.UDP -> "传统 UDP DNS，可能受到 DNS 污染"
+                        DnsProtocol.DOH -> "通过 HTTPS 加密 DNS 查询（推荐）"
+                        DnsProtocol.DOT -> "通过 TLS 加密 DNS 查询（端口 853）"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                     modifier = Modifier.padding(top = 8.dp)

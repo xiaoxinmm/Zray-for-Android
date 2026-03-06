@@ -154,6 +154,8 @@ fun ZrayApp(
     val showUpdateDialog by vm.showUpdateDialog.collectAsState()
     val selectedCoreType by vm.selectedCoreType.collectAsState()
     val allowInsecureSsl by vm.allowInsecureSsl.collectAsState()
+    val dnsProtocol by vm.dnsProtocol.collectAsState()
+    val dnsServer by vm.dnsServer.collectAsState()
     val routingConfig by vm.routingConfig.collectAsState()
     val installedApps by vm.installedApps.collectAsState()
     val isVpnRunning by vm.isVpnRunning.collectAsState()
@@ -304,6 +306,10 @@ fun ZrayApp(
                         goBinaryPath = vm.coreManager.getGoBinaryPath(),
                         allowInsecureSsl = allowInsecureSsl,
                         onInsecureSslToggle = { vm.setAllowInsecureSsl(it) },
+                        dnsProtocol = dnsProtocol,
+                        onDnsProtocolChange = { vm.setDnsProtocol(it) },
+                        dnsServer = dnsServer,
+                        onDnsServerChange = { vm.setDnsServer(it) },
                         onOpenLogViewer = {
                             DebugLog.log("UI", "用户点击查看日志")
                             context.startActivity(
