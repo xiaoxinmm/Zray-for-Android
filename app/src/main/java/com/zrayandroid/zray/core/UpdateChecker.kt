@@ -27,8 +27,8 @@ object UpdateChecker {
         thread(name = "update-check") {
             try {
                 val conn = URL(REPO_API).openConnection() as HttpURLConnection
-                conn.connectTimeout = 10000
-                conn.readTimeout = 10000
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
                 conn.setRequestProperty("Accept", "application/vnd.github+json")
 
                 if (conn.responseCode != 200) {
@@ -67,7 +67,7 @@ object UpdateChecker {
                     onResult(null)
                 }
             } catch (e: Exception) {
-                DebugLog.log("UPDATE", "检查失败: ${e.message}")
+                DebugLog.log("UPDATE", "检查跳过（网络不可达）")
                 onResult(null)
             }
         }
