@@ -202,9 +202,8 @@ class GoZrayCore(private val context: Context) : IZrayCore {
     // ==================== 私有方法 ====================
 
     /**
-     * 生成 Go 客户端兼容的 config.json
-     * 使用 global_port 作为主 SOCKS5 端口（全局代理模式），
-     * smart_port 保留但设为辅助端口（Go 二进制要求同时配置两个端口）。
+     * 生成 Go 客户端兼容的 config.json（安卓精简版）
+     * 仅需 global_port（唯一的 SOCKS5 端口）、remote_host、remote_port、user_hash
      */
     private fun generateConfig(config: String, socksPort: Int): String {
         try {
@@ -233,11 +232,9 @@ class GoZrayCore(private val context: Context) : IZrayCore {
         return """
         {
             "global_port": "127.0.0.1:$socksPort",
-            "smart_port": "127.0.0.1:${socksPort + 1}",
             "remote_host": "$remoteHost",
             "remote_port": $remotePort,
-            "user_hash": "$userHash",
-            "geosite_path": ""
+            "user_hash": "$userHash"
         }
         """.trimIndent()
     }
