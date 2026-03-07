@@ -11,6 +11,7 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.security.SecureRandom
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.TrustManager
 import javax.net.ssl.TrustManagerFactory
@@ -293,6 +294,37 @@ class KotlinZrayCore : IZrayCore {
     }
 
     /**
+     * 递归检查异常链中是否包含 SSL 证书校验错误。
+     * 涵盖 SSLHandshakeException、CertificateException、CertPathValidatorException
+     * 及各种 Android 版本中的异常包装差异。
+     */
+    private fun isCertificateError(e: Throwable): Boolean {
+        // 关键字列表：覆盖各版本 Android 的异常信息差异
+        val keywords = listOf("CertPathValidator", "Trust anchor", "certification path not found")
+
+        // 1. 检查整个异常链
+        var current: Throwable? = e
+        val visited = mutableSetOf<Throwable>()
+        while (current != null && visited.add(current)) {
+            if (current is java.security.cert.CertificateException ||
+                current is java.security.cert.CertPathValidatorException) {
+                return true
+            }
+            // SSLHandshakeException 通常包装证书错误
+            if (current is SSLHandshakeException) {
+                val m = current.message ?: ""
+                if (keywords.any { m.contains(it, ignoreCase = true) }) return true
+            }
+            current = current.cause
+        }
+
+        // 2. 兜底：检查原始异常的 message 和 toString()
+        val msg = e.message ?: ""
+        val str = e.toString()
+        return keywords.any { kw -> msg.contains(kw, ignoreCase = true) || str.contains(kw, ignoreCase = true) }
+    }
+
+    /**
      * Zray 协议隧道: TLS → HTTP伪装 → 协议头 → padding → CMD+地址
      * 支持自动重试（网络中断/RST 场景）
      */
@@ -304,18 +336,15 @@ class KotlinZrayCore : IZrayCore {
             } catch (e: Exception) {
                 val msg = e.message ?: ""
 
-                // 证书校验失败：不可重试，只记录一次，并提示用户
-                val isCertError = e is java.security.cert.CertificateException ||
-                        e.cause is java.security.cert.CertificateException ||
-                        msg.contains("CertPathValidator") ||
-                        msg.contains("Trust anchor")
-                if (isCertError) {
+                // 证书校验失败：不可重试，提示用户
+                if (isCertificateError(e)) {
+                    val hint = "SSL 证书校验失败: 节点服务器的证书不受信任。\n请在「设置」中开启「允许不安全的 SSL 证书」后重新连接。"
                     if (!certErrorLogged) {
                         certErrorLogged = true
-                        val hint = "SSL 证书校验失败: 节点服务器的证书不受信任。\n请在「设置」中开启「允许不安全的 SSL 证书」后重新连接。"
                         DebugLog.log("ERROR", hint)
-                        lastError = hint
                     }
+                    // 始终更新 lastError，确保 UI 能展示提示
+                    lastError = hint
                     return null
                 }
 

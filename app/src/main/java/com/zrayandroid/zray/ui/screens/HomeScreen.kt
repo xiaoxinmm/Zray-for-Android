@@ -467,10 +467,12 @@ private fun SpeedChart(
                 val maxPoints = 30
                 val points = if (data.size > maxPoints) data.takeLast(maxPoints) else data
                 val stepX = if (maxPoints <= 1) 0f else w / (maxPoints - 1).toFloat()
+                val strokeHalf = 1.dp.toPx() // 确保零值线条不被底部裁剪
 
                 points.forEachIndexed { i, value ->
                     val x = i * stepX
-                    val y = h - (value.toFloat() / maxVal.toFloat() * h * 0.9f).coerceIn(0f, h)
+                    val rawY = value.toFloat() / maxVal.toFloat() * h * 0.9f
+                    val y = h - rawY.coerceAtLeast(strokeHalf)
                     if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
                 }
 
