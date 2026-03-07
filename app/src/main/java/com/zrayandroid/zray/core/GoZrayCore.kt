@@ -27,8 +27,6 @@ import java.net.Socket
  */
 class GoZrayCore(private val context: Context) : IZrayCore {
 
-    override val coreType = CoreType.GO_CORE
-
     @Volatile private var running = false
     @Volatile private var latencyMs: Long = -1
     @Volatile private var currentSocksPort = 0
@@ -184,7 +182,6 @@ class GoZrayCore(private val context: Context) : IZrayCore {
 
     override fun getStatus() = CoreStatus(
         running = running,
-        coreType = CoreType.GO_CORE,
         socksPort = currentSocksPort,
         latencyMs = latencyMs,
         remoteHost = remoteHost,
@@ -206,6 +203,8 @@ class GoZrayCore(private val context: Context) : IZrayCore {
 
     /**
      * 生成 Go 客户端兼容的 config.json
+     * 使用 global_port 作为主 SOCKS5 端口（全局代理模式），
+     * smart_port 保留但设为辅助端口（Go 二进制要求同时配置两个端口）。
      */
     private fun generateConfig(config: String, socksPort: Int): String {
         try {
@@ -215,16 +214,12 @@ class GoZrayCore(private val context: Context) : IZrayCore {
                 remotePort = jsonObj["remote_port"]?.jsonPrimitive?.intOrNull ?: 64433
                 val userHash = jsonObj["user_hash"]?.jsonPrimitive?.content ?: ""
 
-                return """
-                {
-                    "smart_port": "127.0.0.1:$socksPort",
-                    "global_port": "127.0.0.1:${socksPort + 1}",
-                    "remote_host": "$remoteHost",
-                    "remote_port": $remotePort,
-                    "user_hash": "$userHash",
-                    "geosite_path": ""
-                }
-                """.trimIndent()
+                return buildConfigJson(socksPort, userHash)
+            } else if (ZALinkParser.isZALink(config)) {
+                val lc = ZALinkParser.parse(config)
+                remoteHost = lc.host
+                remotePort = lc.port
+                return buildConfigJson(socksPort, lc.userHash)
             }
         } catch (e: Exception) {
             DebugLog.log("GO-CORE", "配置解析异常: ${e.message}")
@@ -232,6 +227,19 @@ class GoZrayCore(private val context: Context) : IZrayCore {
 
         // 回退：直接写入原始配置
         return config
+    }
+
+    private fun buildConfigJson(socksPort: Int, userHash: String): String {
+        return """
+        {
+            "global_port": "127.0.0.1:$socksPort",
+            "smart_port": "127.0.0.1:${socksPort + 1}",
+            "remote_host": "$remoteHost",
+            "remote_port": $remotePort,
+            "user_hash": "$userHash",
+            "geosite_path": ""
+        }
+        """.trimIndent()
     }
 
     /**

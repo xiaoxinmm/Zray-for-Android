@@ -27,8 +27,8 @@ data class Profile(
     val link: String = "",
     @Transient val isActive: Boolean = false
 ) {
-    fun toConfigJson(socksPort: Int): String = """
-        {"smart_port":"127.0.0.1:$socksPort","global_port":"127.0.0.1:$socksPort","remote_host":"$server","remote_port":$port,"user_hash":"$userHash","geosite_path":"rules/geosite-cn.txt"}
+    fun toConfigJson(): String = """
+        {"remote_host":"$server","remote_port":$port,"user_hash":"$userHash"}
     """.trimIndent()
 
     val displayInfo: String

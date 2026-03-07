@@ -26,7 +26,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.zrayandroid.zray.core.CoreType
 import kotlinx.coroutines.delay
 
 @Composable
@@ -41,10 +40,8 @@ fun HomeScreen(
     uploadSpeed: Long = 0,
     downloadSpeed: Long = 0,
     totalUpload: Long = 0,
-    totalDownload: Long = 0,
-    selectedCoreType: CoreType = CoreType.KOTLIN_CORE
+    totalDownload: Long = 0
 ) {
-    val isGoCore = selectedCoreType == CoreType.GO_CORE
 
     // ==================== 颜色渐变过渡 ====================
     val connectedColor = Color(0xFF00C853)          // 绿色：已连接
@@ -109,9 +106,8 @@ fun HomeScreen(
     val currentDownloadSpeed by rememberUpdatedState(downloadSpeed)
 
     // 定时采样：每秒添加一个数据点，即使速度值不变也能持续填充图表
-    // （LaunchedEffect 在 isConnected/isGoCore 变化时自动取消并重启）
-    LaunchedEffect(isConnected, isGoCore) {
-        if (isConnected && !isGoCore) {
+    LaunchedEffect(isConnected) {
+        if (isConnected) {
             while (true) {
                 uploadHistory.add(currentUploadSpeed)
                 downloadHistory.add(currentDownloadSpeed)
@@ -304,7 +300,7 @@ fun HomeScreen(
         Spacer(modifier = Modifier.weight(0.15f))
 
         // ==================== 实时网速折线图 ====================
-        if (isConnected && !isGoCore) {
+        if (isConnected) {
             SpeedChart(
                 uploadHistory = uploadHistory,
                 downloadHistory = downloadHistory,
@@ -326,7 +322,6 @@ fun HomeScreen(
                 icon = Icons.Default.ArrowUpward,
                 label = "上传",
                 value = when {
-                    isGoCore && isConnected -> "不适用"
                     isConnected -> com.zrayandroid.zray.core.TrafficStats.formatSpeed(uploadSpeed)
                     else -> "--"
                 },
@@ -337,7 +332,6 @@ fun HomeScreen(
                 icon = Icons.Default.ArrowDownward,
                 label = "下载",
                 value = when {
-                    isGoCore && isConnected -> "不适用"
                     isConnected -> com.zrayandroid.zray.core.TrafficStats.formatSpeed(downloadSpeed)
                     else -> "--"
                 },
@@ -356,7 +350,6 @@ fun HomeScreen(
                 icon = Icons.Default.Speed,
                 label = "延迟",
                 value = when {
-                    isGoCore && isConnected -> "不适用"
                     isConnected -> {
                         if (latencyMs > 0) "${latencyMs} ms"
                         else if (latencyMs == 0L) "< 1 ms"
@@ -371,7 +364,6 @@ fun HomeScreen(
                 icon = Icons.Default.Hub,
                 label = "连接数",
                 value = when {
-                    isGoCore && isConnected -> "不适用"
                     isConnected -> "${com.zrayandroid.zray.core.TrafficStats.activeConns.get()}"
                     else -> "--"
                 },

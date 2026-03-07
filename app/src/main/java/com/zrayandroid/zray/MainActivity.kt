@@ -152,8 +152,6 @@ fun ZrayApp(
     val errorMessage by vm.errorMessage.collectAsState()
     val updateInfo by vm.updateInfo.collectAsState()
     val showUpdateDialog by vm.showUpdateDialog.collectAsState()
-    val selectedCoreType by vm.selectedCoreType.collectAsState()
-    val allowInsecureSsl by vm.allowInsecureSsl.collectAsState()
     val enableIpv6 by vm.enableIpv6.collectAsState()
     val dnsProtocol by vm.dnsProtocol.collectAsState()
     val dnsServer by vm.dnsServer.collectAsState()
@@ -259,8 +257,7 @@ fun ZrayApp(
                         uploadSpeed = uploadSpeed,
                         downloadSpeed = downloadSpeed,
                         totalUpload = totalUpload,
-                        totalDownload = totalDownload,
-                        selectedCoreType = selectedCoreType
+                        totalDownload = totalDownload
                     )
                 }
 
@@ -302,12 +299,6 @@ fun ZrayApp(
                         onPortChange = { vm.setSocksPort(it) },
                         debugEnabled = debugEnabled,
                         onDebugToggle = { vm.setDebugEnabled(it) },
-                        selectedCoreType = selectedCoreType,
-                        onCoreTypeChange = { vm.switchCoreType(it) },
-                        isGoCoreAvailable = vm.coreManager.isGoCoreAvailable(),
-                        goBinaryPath = vm.coreManager.getGoBinaryPath(),
-                        allowInsecureSsl = allowInsecureSsl,
-                        onInsecureSslToggle = { vm.setAllowInsecureSsl(it) },
                         enableIpv6 = enableIpv6,
                         onIpv6Toggle = { vm.setEnableIpv6(it) },
                         dnsProtocol = dnsProtocol,

@@ -49,12 +49,6 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
     private val _debugEnabled = MutableStateFlow(false)
     val debugEnabled: StateFlow<Boolean> = _debugEnabled.asStateFlow()
 
-    private val _selectedCoreType = MutableStateFlow(CoreType.KOTLIN_CORE)
-    val selectedCoreType: StateFlow<CoreType> = _selectedCoreType.asStateFlow()
-
-    private val _allowInsecureSsl = MutableStateFlow(false)
-    val allowInsecureSsl: StateFlow<Boolean> = _allowInsecureSsl.asStateFlow()
-
     private val _enableIpv6 = MutableStateFlow(false)
     val enableIpv6: StateFlow<Boolean> = _enableIpv6.asStateFlow()
 
@@ -133,7 +127,7 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
                     delay(RECONNECT_DELAY_MS)
                     val activeProfile = getActiveProfile() ?: return@launch
                     val config = if (activeProfile.server.isNotEmpty()) {
-                        activeProfile.toConfigJson(_socksPort.value)
+                        activeProfile.toConfigJson()
                     } else {
                         activeProfile.link
                     }
@@ -180,12 +174,9 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val (savedProfiles, savedActiveId) = ProfileStore.loadProfiles(context)
             val savedPort = ProfileStore.loadSocksPort(context)
-            val savedInsecureSsl = ProfileStore.loadAllowInsecureSsl(context)
             _profiles.value = savedProfiles
             _activeProfileId.value = savedActiveId
             _socksPort.value = savedPort
-            _allowInsecureSsl.value = savedInsecureSsl
-            coreManager.allowInsecureSsl = savedInsecureSsl
             // IPv6
             val savedIpv6 = ProfileStore.loadEnableIpv6(context)
             _enableIpv6.value = savedIpv6
@@ -225,16 +216,6 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
                     _downloadSpeed.value = TrafficStats.downloadSpeed
                     _totalUpload.value = TrafficStats.uploadBytes.get()
                     _totalDownload.value = TrafficStats.downloadBytes.get()
-
-                    // 轮询核心运行时错误（如 SSL 证书校验失败）
-                    val core = coreManager.getActiveCore()
-                    if (core is KotlinZrayCore) {
-                        core.lastError?.let { err ->
-                            if (_errorMessage.value == null) {
-                                _errorMessage.value = err
-                            }
-                        }
-                    }
                 } else {
                     _latencyMs.value = -1L
                     _uploadSpeed.value = 0L
@@ -266,15 +247,6 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
         saveAll()
     }
 
-    fun setAllowInsecureSsl(allow: Boolean) {
-        _allowInsecureSsl.value = allow
-        coreManager.allowInsecureSsl = allow
-        viewModelScope.launch {
-            ProfileStore.saveAllowInsecureSsl(context, allow)
-        }
-        DebugLog.log("SETTINGS", "SSL 不安全证书: ${if (allow) "允许" else "禁止"}")
-    }
-
     fun setEnableIpv6(enable: Boolean) {
         _enableIpv6.value = enable
         viewModelScope.launch {
@@ -299,18 +271,6 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
             ProfileStore.saveDnsConfig(context, _dnsProtocol.value, server)
         }
         DebugLog.log("SETTINGS", "DNS 服务器: $server")
-    }
-
-    fun switchCoreType(type: CoreType) {
-        if (_isConnected.value) {
-            _errorMessage.value = "请先断开连接再切换核心"
-            return
-        }
-        _selectedCoreType.value = type
-        coreManager.switchCore(type) { error ->
-            if (error != null) _errorMessage.value = error
-        }
-        DebugLog.log("SETTINGS", "核心切换为: ${type.displayName}")
     }
 
     // ===== Profile 操作 =====
@@ -365,7 +325,7 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
     fun startConnection(onStartService: (String, Int) -> Unit, onPrepareVpn: (() -> Unit) -> Unit) {
         val activeProfile = getActiveProfile() ?: return
         val config = if (activeProfile.server.isNotEmpty()) {
-            activeProfile.toConfigJson(_socksPort.value)
+            activeProfile.toConfigJson()
         } else {
             activeProfile.link
         }
@@ -375,7 +335,7 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         _isConnecting.value = true
-        DebugLog.log("UI", "尝试连接: ${activeProfile.name} (${coreManager.selectedCoreType.displayName})")
+        DebugLog.log("UI", "尝试连接: ${activeProfile.name} (Go 核心)")
 
         coreManager.start(config, _socksPort.value) { success, error ->
             _isConnecting.value = false

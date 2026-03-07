@@ -2,12 +2,9 @@ package com.zrayandroid.zray.core
 
 /**
  * Zray 代理核心抽象接口。
- * 所有核心实现（Kotlin 原生 / Go 子进程）必须实现此接口。
+ * 当前唯一实现为 Go 子进程核心 (GoZrayCore)。
  */
 interface IZrayCore {
-
-    /** 核心类型标识 */
-    val coreType: CoreType
 
     /**
      * 异步启动核心。
@@ -30,16 +27,9 @@ interface IZrayCore {
     fun getStatus(): CoreStatus
 }
 
-/** 核心类型枚举 */
-enum class CoreType(val displayName: String) {
-    KOTLIN_CORE("Kotlin 原生核心"),
-    GO_CORE("Go 高性能核心")
-}
-
 /** 核心运行状态 */
 data class CoreStatus(
     val running: Boolean,
-    val coreType: CoreType,
     val socksPort: Int = 0,
     val latencyMs: Long = -1,
     val remoteHost: String = "",
