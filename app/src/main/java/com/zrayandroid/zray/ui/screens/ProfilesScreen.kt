@@ -14,7 +14,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
+@Serializable
 data class Profile(
     val id: String,
     val name: String,
@@ -22,10 +25,15 @@ data class Profile(
     val port: Int = 64433,
     val userHash: String = "",
     val link: String = "",
-    val isActive: Boolean = false
+    @Transient val isActive: Boolean = false
 ) {
-    fun toConfigJson(socksPort: Int): String = """
-        {"smart_port":"127.0.0.1:$socksPort","global_port":"127.0.0.1:$socksPort","remote_host":"$server","remote_port":$port,"user_hash":"$userHash","geosite_path":"rules/geosite-cn.txt"}
+    /**
+     * 生成最小配置 JSON（仅包含远程服务器信息）。
+     * GoZrayCore.generateConfig() 会从此输出中提取 remote_host/remote_port/user_hash，
+     * 并独立生成包含端口设置的完整 Go 客户端配置。
+     */
+    fun toConfigJson(): String = """
+        {"remote_host":"$server","remote_port":$port,"user_hash":"$userHash"}
     """.trimIndent()
 
     val displayInfo: String
@@ -141,6 +149,9 @@ private fun AddProfileDialog(
     var port by remember { mutableStateOf("64433") }
     var userHash by remember { mutableStateOf("") }
     var linkInput by remember { mutableStateOf("") }
+    var linkError by remember { mutableStateOf<String?>(null) }
+    var serverError by remember { mutableStateOf<String?>(null) }
+    var portError by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -177,20 +188,50 @@ private fun AddProfileDialog(
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = server,
-                        onValueChange = { server = it },
+                        onValueChange = {
+                            server = it
+                            // 校验：IP 地址或域名
+                            val trimmed = it.trim()
+                            serverError = when {
+                                trimmed.isEmpty() -> null
+                                trimmed.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")) -> {
+                                    // IPv4 — 验证每个八位组 0-255
+                                    val valid = trimmed.split(".").all { o -> o.toIntOrNull()?.let { v -> v in 0..255 } == true }
+                                    if (valid) null else "IP 地址八位组范围: 0-255"
+                                }
+                                trimmed.contains(":") && trimmed.matches(Regex("^[0-9a-fA-F:]+$")) -> {
+                                    // IPv6 — 基本格式检查
+                                    try {
+                                        java.net.InetAddress.getByName(trimmed)
+                                        null
+                                    } catch (_: Exception) { "无效的 IPv6 地址" }
+                                }
+                                trimmed.matches(Regex("^[a-zA-Z0-9]([a-zA-Z0-9\\-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*$")) -> null
+                                else -> "请输入有效的 IP 地址或域名"
+                            }
+                        },
                         label = { Text("服务器地址") },
                         placeholder = { Text("1.2.3.4 或 domain.com") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
+                        isError = serverError != null,
+                        supportingText = serverError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
                         shape = RoundedCornerShape(12.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = port,
-                        onValueChange = { port = it },
+                        onValueChange = {
+                            port = it
+                            val p = it.toIntOrNull()
+                            portError = if (it.isBlank() || (p != null && p in 1..65535)) null
+                            else "端口范围: 1-65535"
+                        },
                         label = { Text("端口") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
+                        isError = portError != null,
+                        supportingText = portError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         shape = RoundedCornerShape(12.dp)
                     )
@@ -204,13 +245,46 @@ private fun AddProfileDialog(
                         shape = RoundedCornerShape(12.dp)
                     )
                 } else {
+                    // 预先计算链接解析结果，避免在 composable 参数中使用 try/catch
+                    val linkPreview = remember(linkInput, linkError) {
+                        if (linkError == null && linkInput.trim().startsWith("ZA://", ignoreCase = true) && linkInput.trim().length >= 10) {
+                            try {
+                                val cfg = com.zrayandroid.zray.core.ZALinkParser.parse(linkInput.trim())
+                                "✓ ${cfg.host}:${cfg.port}"
+                            } catch (_: Exception) { null }
+                        } else null
+                    }
+
                     OutlinedTextField(
                         value = linkInput,
-                        onValueChange = { linkInput = it },
+                        onValueChange = {
+                            linkInput = it
+                            val trimmed = it.trim()
+                            linkError = when {
+                                trimmed.isEmpty() -> null
+                                !trimmed.startsWith("ZA://", ignoreCase = true) -> "链接必须以 ZA:// 开头"
+                                trimmed.length < 10 -> "链接内容太短，请检查是否完整"
+                                else -> {
+                                    // 尝试即时解析校验
+                                    try {
+                                        com.zrayandroid.zray.core.ZALinkParser.parse(trimmed)
+                                        null // 解析成功
+                                    } catch (e: Exception) {
+                                        "链接格式错误: ${e.message?.take(100) ?: "解析失败"}"
+                                    }
+                                }
+                            }
+                        },
                         label = { Text("粘贴 ZA:// 链接") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = false,
                         maxLines = 4,
+                        isError = linkError != null,
+                        supportingText = if (linkError != null) {
+                            { Text(linkError!!, color = MaterialTheme.colorScheme.error) }
+                        } else if (linkPreview != null) {
+                            { Text(linkPreview, color = MaterialTheme.colorScheme.primary) }
+                        } else null,
                         shape = RoundedCornerShape(12.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
@@ -225,7 +299,7 @@ private fun AddProfileDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    if (mode == "manual" && server.isNotBlank()) {
+                    if (mode == "manual" && server.isNotBlank() && serverError == null && portError == null) {
                         val p = Profile(
                             id = java.util.UUID.randomUUID().toString(),
                             name = name.ifBlank { server },
@@ -234,7 +308,7 @@ private fun AddProfileDialog(
                             userHash = userHash.trim()
                         )
                         onConfirm(p)
-                    } else if (mode == "link" && linkInput.trim().startsWith("ZA://", ignoreCase = true)) {
+                    } else if (mode == "link" && linkInput.trim().startsWith("ZA://", ignoreCase = true) && linkError == null) {
                         try {
                             val cfg = com.zrayandroid.zray.core.ZALinkParser.parse(linkInput.trim())
                             val p = Profile(
@@ -248,19 +322,13 @@ private fun AddProfileDialog(
                             com.zrayandroid.zray.core.DebugLog.log("PROFILE", "ZA 链接解析成功: ${cfg.host}:${cfg.port}")
                             onConfirm(p)
                         } catch (e: Exception) {
+                            linkError = "解析失败: ${e.message?.take(100) ?: "未知错误"}"
                             com.zrayandroid.zray.core.DebugLog.log("ERROR", "ZA 链接解析失败: ${e.message}")
-                            // 解析失败存原始链接
-                            val p = Profile(
-                                id = java.util.UUID.randomUUID().toString(),
-                                name = "ZA 节点 ${System.currentTimeMillis() % 1000}",
-                                link = linkInput.trim()
-                            )
-                            onConfirm(p)
                         }
                     }
                 },
-                enabled = if (mode == "manual") server.isNotBlank()
-                         else linkInput.trim().startsWith("ZA://", ignoreCase = true)
+                enabled = if (mode == "manual") server.isNotBlank() && serverError == null && portError == null
+                         else linkInput.trim().startsWith("ZA://", ignoreCase = true) && linkError == null
             ) { Text("添加") }
         },
         dismissButton = {

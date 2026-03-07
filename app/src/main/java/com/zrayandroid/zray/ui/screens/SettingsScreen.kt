@@ -1,17 +1,18 @@
 package com.zrayandroid.zray.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.zrayandroid.zray.core.CoreType
+import com.zrayandroid.zray.core.DnsProtocol
+import com.zrayandroid.zray.core.ZrayDnsResolver
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -20,74 +21,25 @@ fun SettingsScreen(
     onPortChange: (Int) -> Unit,
     debugEnabled: Boolean,
     onDebugToggle: (Boolean) -> Unit,
-    selectedCoreType: CoreType = CoreType.KOTLIN_CORE,
-    onCoreTypeChange: (CoreType) -> Unit = {},
-    isGoCoreAvailable: Boolean = false,
-    goBinaryPath: String = ""
+    enableIpv6: Boolean = false,
+    onIpv6Toggle: (Boolean) -> Unit = {},
+    dnsProtocol: DnsProtocol = DnsProtocol.DOH,
+    onDnsProtocolChange: (DnsProtocol) -> Unit = {},
+    dnsServer: String = ZrayDnsResolver.DEFAULT_DOH_SERVER,
+    onDnsServerChange: (String) -> Unit = {},
+    onOpenLogViewer: () -> Unit = {}
 ) {
     var portText by remember { mutableStateOf(socksPort.toString()) }
     var showAbout by remember { mutableStateOf(false) }
+    var dnsServerText by remember { mutableStateOf(dnsServer) }
+    var dnsExpanded by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp)
     ) {
-        Text(
-            "设置",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 16.dp)
-        )
-
-        // ===== 代理核心选择 =====
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("代理核心", style = MaterialTheme.typography.titleSmall)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    "选择代理引擎，切换后需重新连接",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Kotlin 核心
-                CoreOptionCard(
-                    title = "Kotlin 原生核心",
-                    subtitle = "纯 JVM 实现，兼容性好，无需额外文件",
-                    selected = selectedCoreType == CoreType.KOTLIN_CORE,
-                    onClick = { onCoreTypeChange(CoreType.KOTLIN_CORE) }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Go 核心
-                CoreOptionCard(
-                    title = "Go 高性能核心",
-                    subtitle = if (isGoCoreAvailable) {
-                        "uTLS Chrome 指纹伪装，抗 DPI 审查"
-                    } else {
-                        "⚠️ 未安装。需将 zray-client 放入:\n$goBinaryPath"
-                    },
-                    selected = selectedCoreType == CoreType.GO_CORE,
-                    enabled = isGoCoreAvailable,
-                    onClick = {
-                        if (isGoCoreAvailable) {
-                            onCoreTypeChange(CoreType.GO_CORE)
-                        }
-                    },
-                    showWarning = !isGoCoreAvailable
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
         // ===== SOCKS5 端口 =====
         Card(
             shape = RoundedCornerShape(16.dp),
@@ -123,7 +75,162 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // ===== Debug 开关 =====
+        // ===== DNS 设置 =====
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("DNS 设置", style = MaterialTheme.typography.titleSmall)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "选择 DNS 解析协议和服务器，防止 DNS 污染",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // DNS 协议选择
+                ExposedDropdownMenuBox(
+                    expanded = dnsExpanded,
+                    onExpandedChange = { dnsExpanded = !dnsExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = when (dnsProtocol) {
+                            DnsProtocol.UDP -> "UDP (传统 DNS)"
+                            DnsProtocol.DOH -> "DoH (DNS over HTTPS)"
+                            DnsProtocol.DOT -> "DoT (DNS over TLS)"
+                        },
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("协议") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = dnsExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = dnsExpanded,
+                        onDismissRequest = { dnsExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("UDP (传统 DNS)") },
+                            onClick = {
+                                onDnsProtocolChange(DnsProtocol.UDP)
+                                dnsServerText = ZrayDnsResolver.DEFAULT_UDP_SERVER
+                                onDnsServerChange(ZrayDnsResolver.DEFAULT_UDP_SERVER)
+                                dnsExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("DoH (DNS over HTTPS)") },
+                            onClick = {
+                                onDnsProtocolChange(DnsProtocol.DOH)
+                                dnsServerText = ZrayDnsResolver.DEFAULT_DOH_SERVER
+                                onDnsServerChange(ZrayDnsResolver.DEFAULT_DOH_SERVER)
+                                dnsExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("DoT (DNS over TLS)") },
+                            onClick = {
+                                onDnsProtocolChange(DnsProtocol.DOT)
+                                dnsServerText = ZrayDnsResolver.DEFAULT_DOT_SERVER
+                                onDnsServerChange(ZrayDnsResolver.DEFAULT_DOT_SERVER)
+                                dnsExpanded = false
+                            }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // DNS 服务器地址
+                OutlinedTextField(
+                    value = dnsServerText,
+                    onValueChange = {
+                        dnsServerText = it
+                        onDnsServerChange(it)
+                    },
+                    label = {
+                        Text(
+                            when (dnsProtocol) {
+                                DnsProtocol.UDP -> "DNS 服务器 IP"
+                                DnsProtocol.DOH -> "DoH URL"
+                                DnsProtocol.DOT -> "DoT 服务器 (IP:853)"
+                            }
+                        )
+                    },
+                    placeholder = {
+                        Text(
+                            when (dnsProtocol) {
+                                DnsProtocol.UDP -> ZrayDnsResolver.DEFAULT_UDP_SERVER
+                                DnsProtocol.DOH -> ZrayDnsResolver.DEFAULT_DOH_SERVER
+                                DnsProtocol.DOT -> ZrayDnsResolver.DEFAULT_DOT_SERVER
+                            }
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                Text(
+                    when (dnsProtocol) {
+                        DnsProtocol.UDP -> "传统 UDP DNS，可能受到 DNS 污染"
+                        DnsProtocol.DOH -> "通过 HTTPS 加密 DNS 查询（推荐）"
+                        DnsProtocol.DOT -> "通过 TLS 加密 DNS 查询（端口 853）"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ===== 调试模式开关 =====
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("调试模式", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            if (debugEnabled) "已开启 — 全量日志将保存至文件"
+                            else "关闭状态 — 仅保留内存日志",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                    Switch(checked = debugEnabled, onCheckedChange = onDebugToggle)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                // 查看日志按钮
+                OutlinedButton(
+                    onClick = onOpenLogViewer,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("查看日志")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ===== IPv6 代理支持 =====
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
@@ -137,15 +244,16 @@ fun SettingsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text("Debug 日志", style = MaterialTheme.typography.titleSmall)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("IPv6 代理", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "开启后在顶部显示实时日志窗口",
+                        if (enableIpv6) "已启用 — 代理 IPv4 + IPv6 流量"
+                        else "已关闭 — 仅代理 IPv4 流量",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                     )
                 }
-                Switch(checked = debugEnabled, onCheckedChange = onDebugToggle)
+                Switch(checked = enableIpv6, onCheckedChange = onIpv6Toggle)
             }
         }
 
@@ -182,7 +290,7 @@ fun SettingsScreen(
                     Text("v${com.zrayandroid.zray.APP_VERSION}")
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("轻量加密代理客户端")
-                    Text("当前核心: ${selectedCoreType.displayName}")
+                    Text("核心: Go uTLS 高性能引擎")
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         "https://github.com/xiaoxinmm/Zray-for-Android",
@@ -196,68 +304,5 @@ fun SettingsScreen(
             },
             shape = RoundedCornerShape(20.dp)
         )
-    }
-}
-
-/**
- * 核心选项卡片
- */
-@Composable
-private fun CoreOptionCard(
-    title: String,
-    subtitle: String,
-    selected: Boolean,
-    enabled: Boolean = true,
-    onClick: () -> Unit,
-    showWarning: Boolean = false
-) {
-    val containerColor = when {
-        selected -> MaterialTheme.colorScheme.primaryContainer
-        !enabled -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        else -> MaterialTheme.colorScheme.surface
-    }
-
-    Card(
-        onClick = onClick,
-        enabled = enabled,
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = containerColor),
-        border = if (selected) CardDefaults.outlinedCardBorder() else null
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            RadioButton(
-                selected = selected,
-                onClick = onClick,
-                enabled = enabled
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurface
-                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-                )
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                )
-            }
-            if (showWarning) {
-                Icon(
-                    Icons.Default.Warning,
-                    contentDescription = "不可用",
-                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.6f),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
     }
 }

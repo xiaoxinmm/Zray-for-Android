@@ -12,16 +12,19 @@ import androidx.core.app.NotificationCompat
 import com.zrayandroid.zray.MainActivity
 import com.zrayandroid.zray.R
 import com.zrayandroid.zray.core.DebugLog
-import com.zrayandroid.zray.core.PerAppMode
 import com.zrayandroid.zray.core.ProxyMode
+import com.zrayandroid.zray.core.ZrayDnsResolver
+import kotlinx.coroutines.*
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.concurrent.thread
 
 class ZrayVpnService : VpnService() {
 
@@ -30,23 +33,34 @@ class ZrayVpnService : VpnService() {
         const val ACTION_STOP = "com.zrayandroid.zray.VPN_STOP"
         const val EXTRA_SOCKS_PORT = "socks_port"
         const val EXTRA_MODE = "proxy_mode"
-        const val EXTRA_PER_APP_MODE = "per_app_mode"
         const val EXTRA_SELECTED_APPS = "selected_apps"
+        const val EXTRA_ENABLE_IPV6 = "enable_ipv6"
         const val CHANNEL_ID = "zray_vpn"
         const val NOTIFICATION_ID = 2
         private const val VPN_ADDRESS = "10.0.0.2"
+        private const val VPN_ADDRESS_V6 = "fd00::2"
         private const val VPN_ROUTE = "0.0.0.0"
+        private const val VPN_ROUTE_V6 = "::"
         private const val VPN_DNS = "8.8.8.8"
+        private const val VPN_DNS_V6 = "2001:4860:4860::8888"
         private const val VPN_MTU = 1500
+        private const val SOCKS5_HANDSHAKE_TIMEOUT = 30000
+        private const val SOCKS5_DATA_POLL_TIMEOUT = 100
+        /** UDP 会话超时（毫秒），超时后自动清理 */
+        private const val UDP_SESSION_TIMEOUT_MS = 120_000L
         val isRunning = AtomicBoolean(false)
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
-    private var workerThread: Thread? = null
     private val running = AtomicBoolean(false)
     private var socksPort = 1081
-    private val sessions = ConcurrentHashMap<Int, TcpSession>()
+    private var enableIpv6 = false
+    private val tcpSessions = ConcurrentHashMap<Int, TcpSession>()
+    private val udpSessions = ConcurrentHashMap<Long, UdpSession>()
     private var seqCounter = 100000
+
+    // 协程作用域，替代原始 thread
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun onCreate() {
         super.onCreate()
@@ -59,18 +73,22 @@ class ZrayVpnService : VpnService() {
             ACTION_STOP -> { stopVpn(); return START_NOT_STICKY }
             ACTION_START -> {
                 socksPort = intent.getIntExtra(EXTRA_SOCKS_PORT, 1081)
-                val mode = try { ProxyMode.valueOf(intent.getStringExtra(EXTRA_MODE) ?: "") } catch (_: Exception) { ProxyMode.VPN_GLOBAL }
-                val perAppMode = try { PerAppMode.valueOf(intent.getStringExtra(EXTRA_PER_APP_MODE) ?: "") } catch (_: Exception) { PerAppMode.WHITELIST }
+                enableIpv6 = intent.getBooleanExtra(EXTRA_ENABLE_IPV6, false)
+                val mode = try { ProxyMode.valueOf(intent.getStringExtra(EXTRA_MODE) ?: "") } catch (_: Exception) { ProxyMode.VPN_PER_APP }
                 val apps = intent.getStringArrayListExtra(EXTRA_SELECTED_APPS)?.toSet() ?: emptySet()
-                startVpn(mode, perAppMode, apps)
+                if (mode == ProxyMode.VPN_PER_APP && apps.isEmpty()) {
+                    DebugLog.log("VPN", "VPN 分应用模式未选择任何应用，跳过启动")
+                    return START_NOT_STICKY
+                }
+                startVpn(mode, apps)
             }
         }
         return START_STICKY
     }
 
-    private fun startVpn(mode: ProxyMode, perAppMode: PerAppMode, selectedApps: Set<String>) {
+    private fun startVpn(mode: ProxyMode, selectedApps: Set<String>) {
         if (running.get()) return
-        DebugLog.log("VPN", "启动 VPN: mode=$mode, port=$socksPort, apps=${selectedApps.size}")
+        DebugLog.log("VPN", "启动 VPN: mode=$mode, port=$socksPort, ipv6=$enableIpv6, apps=${selectedApps.size}")
 
         val builder = Builder()
             .setSession("Zray VPN")
@@ -80,20 +98,17 @@ class ZrayVpnService : VpnService() {
             .addDnsServer(VPN_DNS)
             .addDnsServer("8.8.4.4")
 
-        // 分应用
+        // IPv6 支持
+        if (enableIpv6) {
+            builder.addAddress(VPN_ADDRESS_V6, 128)
+            builder.addRoute(VPN_ROUTE_V6, 0)
+            builder.addDnsServer(VPN_DNS_V6)
+        }
+
+        // 分应用：选中的应用走代理
         if (mode == ProxyMode.VPN_PER_APP && selectedApps.isNotEmpty()) {
-            when (perAppMode) {
-                PerAppMode.WHITELIST -> {
-                    for (pkg in selectedApps) {
-                        try { builder.addAllowedApplication(pkg) } catch (_: Exception) {}
-                    }
-                }
-                PerAppMode.BLACKLIST -> {
-                    try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
-                    for (pkg in selectedApps) {
-                        try { builder.addDisallowedApplication(pkg) } catch (_: Exception) {}
-                    }
-                }
+            for (pkg in selectedApps) {
+                try { builder.addAllowedApplication(pkg) } catch (_: Exception) {}
             }
         } else {
             try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
@@ -107,6 +122,10 @@ class ZrayVpnService : VpnService() {
         running.set(true)
         isRunning.set(true)
 
+        // 设置 DNS Resolver 的 socket 保护回调，防止 DNS 查询走 VPN 通道
+        ZrayDnsResolver.protectSocket = { ds -> protect(ds) }
+        ZrayDnsResolver.protectSocketFd = { s -> protect(s) }
+
         val notif = buildNotification("Zray VPN 运行中")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notif, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -114,7 +133,7 @@ class ZrayVpnService : VpnService() {
             startForeground(NOTIFICATION_ID, notif)
         }
 
-        workerThread = thread(name = "vpn-worker") { runTunnel() }
+        scope.launch { runTunnel() }
         DebugLog.log("VPN", "VPN 启动成功")
     }
 
@@ -122,11 +141,15 @@ class ZrayVpnService : VpnService() {
         if (!running.getAndSet(false)) return
         DebugLog.log("VPN", "停止 VPN")
         isRunning.set(false)
-        sessions.values.forEach { it.close() }
-        sessions.clear()
+        ZrayDnsResolver.protectSocket = null
+        ZrayDnsResolver.protectSocketFd = null
+        tcpSessions.values.forEach { it.close() }
+        tcpSessions.clear()
+        udpSessions.values.forEach { it.close() }
+        udpSessions.clear()
         try { vpnInterface?.close() } catch (_: Exception) {}
         vpnInterface = null
-        workerThread?.interrupt()
+        scope.coroutineContext[Job]?.children?.forEach { it.cancel() }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -136,33 +159,60 @@ class ZrayVpnService : VpnService() {
 
     // ==================== TUN 转发 ====================
 
-    private fun runTunnel() {
+    private suspend fun runTunnel() {
         val fd = vpnInterface?.fileDescriptor ?: return
         val input = FileInputStream(fd)
         val output = FileOutputStream(fd)
         val buf = ByteBuffer.allocate(VPN_MTU)
 
-        // 回包线程：从 SOCKS5 读取响应写回 TUN
-        thread(name = "vpn-resp", isDaemon = true) {
-            while (running.get()) {
+        // 回包协程：从 SOCKS5 读取响应写回 TUN
+        scope.launch {
+            while (running.get() && isActive) {
                 try {
-                    val iter = sessions.entries.iterator()
+                    val iter = tcpSessions.entries.iterator()
                     while (iter.hasNext()) {
-                        val (port, session) = iter.next()
+                        val (_, session) = iter.next()
                         try {
                             val data = session.tryRead()
                             if (data != null && data.isNotEmpty()) {
                                 val pkt = buildTcpDataPacket(session, data)
                                 if (pkt != null) synchronized(output) { output.write(pkt); output.flush() }
                             }
+                        } catch (e: java.io.IOException) {
+                            // EBADF / Socket closed / Broken pipe — 远端或本地已关闭，
+                            // 安静清理 Session，无需打印冗余日志
+                            iter.remove()
+                            session.close()
                         } catch (_: Exception) {
                             iter.remove()
                             session.close()
                         }
                     }
-                    Thread.sleep(1)
-                } catch (_: InterruptedException) { break }
-                catch (e: Exception) { if (running.get()) DebugLog.log("VPN", "回包: ${e.message}") }
+                    delay(1)
+                } catch (_: CancellationException) { break }
+                catch (e: java.io.IOException) {
+                    // TUN fd 已关闭 (VPN 停止中)，安静退出
+                    break
+                }
+                catch (e: Exception) {
+                    if (running.get()) DebugLog.log("VPN", "回包: ${e.message}")
+                }
+            }
+        }
+
+        // UDP 会话清理协程
+        scope.launch {
+            while (running.get() && isActive) {
+                val now = System.currentTimeMillis()
+                val iter = udpSessions.entries.iterator()
+                while (iter.hasNext()) {
+                    val (_, session) = iter.next()
+                    if (now - session.lastActiveTime > UDP_SESSION_TIMEOUT_MS) {
+                        iter.remove()
+                        session.close()
+                    }
+                }
+                delay(10_000)
             }
         }
 
@@ -208,20 +258,20 @@ class ZrayVpnService : VpnService() {
         val hdrEnd = ihl + doff
         val payloadLen = pkt.limit() - hdrEnd
 
-        if (rst) { sessions.remove(srcPort)?.close(); return }
+        if (rst) { tcpSessions.remove(srcPort)?.close(); return }
 
         if (syn && !ackF) {
             // 新连接
             val s = TcpSession(srcIp, srcPort, dstIp, dstPort, seq, seqCounter)
             seqCounter += 10000
-            sessions[srcPort] = s
-            thread(name = "socks-$srcPort") {
+            tcpSessions[srcPort] = s
+            scope.launch {
                 try {
                     val sock = Socket()
                     protect(sock)
                     sock.connect(InetSocketAddress("127.0.0.1", socksPort), 10000)
                     sock.tcpNoDelay = true
-                    sock.soTimeout = 100
+                    sock.soTimeout = SOCKS5_HANDSHAKE_TIMEOUT
                     // SOCKS5 handshake
                     val o = sock.getOutputStream(); val i = sock.getInputStream()
                     o.write(byteArrayOf(5, 1, 0)); o.flush()
@@ -232,6 +282,7 @@ class ZrayVpnService : VpnService() {
                         (dstPort shr 8).toByte(), (dstPort and 0xFF).toByte())); o.flush()
                     val r = ByteArray(10); i.read(r)
                     if (r[1] != 0.toByte()) throw Exception("SOCKS5 refused")
+                    sock.soTimeout = SOCKS5_DATA_POLL_TIMEOUT
                     s.socket = sock
                     s.clientSeq = seq + 1
                     s.state = TcpSession.State.ESTABLISHED
@@ -240,9 +291,14 @@ class ZrayVpnService : VpnService() {
                     if (sa != null) synchronized(out) { out.write(sa); out.flush() }
                     s.serverSeq++
                     DebugLog.log("VPN", "→ $dstIp:$dstPort OK")
+                } catch (e: java.io.IOException) {
+                    // EBADF / Connection reset / Broken pipe — 连接中断，安静清理
+                    tcpSessions.remove(srcPort)
+                    val r2 = buildCtl(s, rst = true, ack = true)
+                    if (r2 != null) try { synchronized(out) { out.write(r2); out.flush() } } catch (_: Exception) {}
                 } catch (e: Exception) {
                     DebugLog.log("VPN", "→ $dstIp:$dstPort 失败: ${e.message}")
-                    sessions.remove(srcPort)
+                    tcpSessions.remove(srcPort)
                     val r2 = buildCtl(s, rst = true, ack = true)
                     if (r2 != null) try { synchronized(out) { out.write(r2); out.flush() } } catch (_: Exception) {}
                 }
@@ -250,14 +306,14 @@ class ZrayVpnService : VpnService() {
             return
         }
 
-        val s = sessions[srcPort] ?: return
+        val s = tcpSessions[srcPort] ?: return
 
         if (fin) {
             s.clientSeq = seq + 1
             val fa = buildCtl(s, fin = true, ack = true)
             if (fa != null) synchronized(out) { out.write(fa); out.flush() }
             s.serverSeq++
-            sessions.remove(srcPort)?.close()
+            tcpSessions.remove(srcPort)?.close()
             return
         }
 
@@ -271,30 +327,128 @@ class ZrayVpnService : VpnService() {
         }
     }
 
+    /**
+     * 处理 UDP 流量。
+     *
+     * 策略：
+     * - DNS（端口 53）：拦截并通过 ZrayDnsResolver 进行 DoH/DoT/UDP 解析
+     * - QUIC/HTTP（端口 443、80）：返回 ICMP Port Unreachable 强制 App 回退到 TCP 走代理通道
+     * - 其他端口：直接 UDP 转发
+     */
     private fun handleUdp(pkt: ByteBuffer, ihl: Int, srcIp: String, dstIp: String, out: FileOutputStream) {
         if (pkt.limit() < ihl + 8) return
         val srcPort = u16(pkt, ihl)
         val dstPort = u16(pkt, ihl + 2)
-        if (dstPort != 53) return
         val udpLen = u16(pkt, ihl + 4)
         val payStart = ihl + 8
         val payLen = udpLen - 8
         if (payLen <= 0) return
-        val query = ByteArray(payLen)
-        System.arraycopy(pkt.array(), payStart, query, 0, payLen)
 
-        thread(name = "dns") {
-            try {
-                val ds = java.net.DatagramSocket()
-                protect(ds)
-                ds.send(java.net.DatagramPacket(query, query.size, java.net.InetAddress.getByName(dstIp), 53))
-                ds.soTimeout = 5000
-                val resp = ByteArray(1500)
-                val rp = java.net.DatagramPacket(resp, resp.size)
-                ds.receive(rp); ds.close()
-                val udpResp = buildUdpPacket(dstIp, srcIp, 53, srcPort, resp.copyOf(rp.length))
-                if (udpResp != null) synchronized(out) { out.write(udpResp); out.flush() }
-            } catch (_: Exception) {}
+        // 对 QUIC (UDP 443) 和 HTTP (UDP 80) 返回 ICMP Port Unreachable，
+        // 强制 App 立即回退到 TCP 通过 SOCKS5 代理出去
+        if (dstPort == 443 || dstPort == 80) {
+            val icmp = buildIcmpPortUnreachable(pkt, ihl, dstIp, srcIp)
+            if (icmp != null) {
+                try { synchronized(out) { out.write(icmp); out.flush() } } catch (_: Exception) {}
+            }
+            return
+        }
+
+        val payload = ByteArray(payLen)
+        System.arraycopy(pkt.array(), payStart, payload, 0, payLen)
+
+        // DNS 流量（端口 53）通过 ZrayDnsResolver 处理
+        if (dstPort == 53) {
+            scope.launch {
+                try {
+                    val response = ZrayDnsResolver.resolveRaw(payload)
+                    if (response != null) {
+                        // 构造 DNS 响应包（源/目对调）写回 TUN
+                        val udpResp = buildUdpPacket(dstIp, srcIp, dstPort, srcPort, response)
+                        if (udpResp != null) synchronized(out) { out.write(udpResp); out.flush() }
+                    } else {
+                        // DNS 解析返回 null — 返回 NXDOMAIN 阻断，防止回退到系统 DNS 泄露
+                        val nxResp = buildDnsNxdomain(payload)
+                        if (nxResp != null) {
+                            val udpResp = buildUdpPacket(dstIp, srcIp, dstPort, srcPort, nxResp)
+                            if (udpResp != null) synchronized(out) { out.write(udpResp); out.flush() }
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (running.get()) DebugLog.log("VPN", "DNS 解析失败(已拦截) → $dstIp: ${e.message}")
+                    // DoH/DoT 解析失败 — 返回 SERVFAIL 阻断流量，不回退到系统 DNS
+                    try {
+                        val failResp = buildDnsServfail(payload)
+                        if (failResp != null) {
+                            val udpResp = buildUdpPacket(dstIp, srcIp, dstPort, srcPort, failResp)
+                            if (udpResp != null) synchronized(out) { out.write(udpResp); out.flush() }
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+            return
+        }
+
+        // 非 DNS 的 UDP 流量：使用 Session 机制直接转发
+        // 会话 Key：srcPort + dstIp(numeric) + dstPort 的组合，避免 hashCode 碰撞
+        val ipParts = dstIp.split(".")
+        val ipNumeric = if (ipParts.size == 4) {
+            ((ipParts[0].toLong() and 0xFF) shl 24) or
+            ((ipParts[1].toLong() and 0xFF) shl 16) or
+            ((ipParts[2].toLong() and 0xFF) shl 8) or
+            (ipParts[3].toLong() and 0xFF)
+        } else {
+            dstIp.hashCode().toLong() and 0xFFFFFFFFL
+        }
+        val sessionKey = (srcPort.toLong() shl 32) or (ipNumeric xor dstPort.toLong())
+
+        val session = udpSessions.getOrPut(sessionKey) {
+            val ds = DatagramSocket()
+            protect(ds)
+            ds.soTimeout = 5000
+            val newSession = UdpSession(
+                srcIp = srcIp, srcPort = srcPort,
+                dstIp = dstIp, dstPort = dstPort,
+                socket = ds
+            )
+            // 启动回包接收协程
+            scope.launch {
+                val buf = ByteArray(VPN_MTU)
+                val rp = DatagramPacket(buf, buf.size)
+                while (running.get() && isActive && !newSession.closed) {
+                    try {
+                        newSession.socket.receive(rp)
+                        newSession.lastActiveTime = System.currentTimeMillis()
+                        val respData = buf.copyOf(rp.length)
+                        val udpResp = buildUdpPacket(dstIp, srcIp, dstPort, srcPort, respData)
+                        if (udpResp != null) synchronized(out) { out.write(udpResp); out.flush() }
+                    } catch (_: java.net.SocketTimeoutException) {
+                        // 超时不退出，继续等待
+                    } catch (_: Exception) {
+                        break
+                    }
+                }
+                udpSessions.remove(sessionKey)
+                newSession.close()
+            }
+            newSession
+        }
+
+        session.lastActiveTime = System.currentTimeMillis()
+
+        // 发送 UDP 数据（检查会话未关闭且 VPN 仍在运行）
+        if (!session.closed && running.get()) {
+            scope.launch {
+                try {
+                    session.socket.send(
+                        DatagramPacket(payload, payload.size, InetAddress.getByName(dstIp), dstPort)
+                    )
+                } catch (_: java.io.IOException) {
+                    // Socket 已关闭 (VPN 停止中)，安静忽略
+                } catch (e: Exception) {
+                    if (running.get()) DebugLog.log("VPN", "UDP发送失败 → $dstIp:$dstPort: ${e.message}")
+                }
+            }
         }
     }
 
@@ -354,6 +508,37 @@ class ZrayVpnService : VpnService() {
         } catch (_: Exception) { return null }
     }
 
+    /**
+     * 构造 ICMP Destination Unreachable / Port Unreachable (Type=3, Code=3) 报文。
+     * 用于拒绝 QUIC (UDP 443) 等无法代理的 UDP 流量，迫使 App 回退到 TCP。
+     * 格式: IP(20) + ICMP(8) + 原始IP头(ihl) + 原始数据前8字节(UDP头)
+     */
+    private fun buildIcmpPortUnreachable(origPkt: ByteBuffer, ihl: Int, newSrcIp: String, newDstIp: String): ByteArray? {
+        try {
+            // ICMP 载荷 = 原始 IP 头 + 原始数据前 8 字节（UDP 头）
+            // RFC 792: ICMP 错误报文必须包含原始 IP 头 + 原始数据的前 8 字节
+            val quotedLen = minOf(ihl + 8, origPkt.limit())
+            val total = 20 + 8 + quotedLen  // 新IP头 + ICMP头 + 引用数据
+            val p = ByteArray(total)
+            val b = ByteBuffer.wrap(p)
+            // 新 IP 头
+            b.put(0x45.toByte()); b.put(0); b.putShort(total.toShort()); b.putShort(0)
+            b.putShort(0x4000.toShort()); b.put(64.toByte()); b.put(1.toByte()); b.putShort(0)  // proto=1 (ICMP)
+            putIp(b, newSrcIp); putIp(b, newDstIp)
+            val ipCs = checksum(p, 0, 20)
+            p[10] = (ipCs shr 8).toByte(); p[11] = (ipCs and 0xFF).toByte()
+            // ICMP 头: Type=3 (Dest Unreachable), Code=3 (Port Unreachable), Checksum, Unused(4)
+            b.position(20)
+            b.put(3.toByte()); b.put(3.toByte()); b.putShort(0); b.putInt(0) // checksum placeholder + unused
+            // 引用原始 IP 头 + UDP 头前 8 字节
+            System.arraycopy(origPkt.array(), 0, p, 28, quotedLen)
+            // 计算 ICMP 校验和
+            val icmpCs = checksum(p, 20, total - 20)
+            p[22] = (icmpCs shr 8).toByte(); p[23] = (icmpCs and 0xFF).toByte()
+            return p
+        } catch (_: Exception) { return null }
+    }
+
     // ==================== 工具 ====================
 
     private fun ipStr(b: ByteBuffer, off: Int) = "${b.get(off).toInt() and 0xFF}.${b.get(off+1).toInt() and 0xFF}.${b.get(off+2).toInt() and 0xFF}.${b.get(off+3).toInt() and 0xFF}"
@@ -377,6 +562,38 @@ class ZrayVpnService : VpnService() {
         System.arraycopy(pkt, off, pseudo, 12, len)
         pseudo[12+16] = 0; pseudo[12+17] = 0
         return checksum(pseudo, 0, pseudo.size)
+    }
+
+    /**
+     * 构造 DNS NXDOMAIN 响应（返回码 3），阻断域名解析。
+     * 复制原始请求的 ID 和问题段，设置 QR=1, RCODE=NXDOMAIN。
+     */
+    private fun buildDnsNxdomain(query: ByteArray): ByteArray? {
+        if (query.size < 12) return null
+        val resp = query.copyOf()
+        // QR=1, Opcode=0, AA=0, TC=0, RD=1 → 0x81
+        resp[2] = 0x81.toByte()
+        // RA=1, Z=0, RCODE=3 (NXDOMAIN) → 0x83
+        resp[3] = 0x83.toByte()
+        // ANCOUNT=0, NSCOUNT=0, ARCOUNT=0
+        resp[6] = 0; resp[7] = 0; resp[8] = 0; resp[9] = 0; resp[10] = 0; resp[11] = 0
+        return resp
+    }
+
+    /**
+     * 构造 DNS SERVFAIL 响应（返回码 2），告知客户端服务器错误。
+     * 用于 DoH/DoT 解析异常时阻断流量，防止回退到系统 DNS。
+     */
+    private fun buildDnsServfail(query: ByteArray): ByteArray? {
+        if (query.size < 12) return null
+        val resp = query.copyOf()
+        // QR=1, Opcode=0, AA=0, TC=0, RD=1 → 0x81
+        resp[2] = 0x81.toByte()
+        // RA=1, Z=0, RCODE=2 (SERVFAIL) → 0x82
+        resp[3] = 0x82.toByte()
+        // ANCOUNT=0, NSCOUNT=0, ARCOUNT=0
+        resp[6] = 0; resp[7] = 0; resp[8] = 0; resp[9] = 0; resp[10] = 0; resp[11] = 0
+        return resp
     }
 
     private fun createNotificationChannel() {
@@ -409,8 +626,13 @@ class ZrayVpnService : VpnService() {
         enum class State { SYN_RECEIVED, ESTABLISHED, CLOSED }
 
         fun writeToRemote(data: ByteArray) {
-            try { socket?.getOutputStream()?.apply { write(data); flush() } }
-            catch (_: Exception) {}
+            if (state == State.CLOSED) return
+            try {
+                socket?.getOutputStream()?.apply { write(data); flush() }
+            } catch (_: java.io.IOException) {
+                // EBADF / Socket closed / Broken pipe — 连接已关闭，忽略写入错误
+                state = State.CLOSED
+            } catch (_: Exception) {}
         }
 
         fun tryRead(): ByteArray? {
@@ -422,12 +644,34 @@ class ZrayVpnService : VpnService() {
                 val buf = ByteArray(minOf(avail, 4096))
                 val n = s.getInputStream().read(buf)
                 if (n > 0) buf.copyOf(n) else null
+            } catch (_: java.io.IOException) {
+                // Socket 已关闭或连接重置，标记 Session 结束
+                state = State.CLOSED
+                null
             } catch (_: Exception) { null }
         }
 
         fun close() {
             state = State.CLOSED
             try { socket?.close() } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * UDP 会话，维护 DatagramSocket 以复用连接。
+     * 支持所有端口的 UDP 流量转发（不仅限 DNS）。
+     */
+    class UdpSession(
+        val srcIp: String, val srcPort: Int,
+        val dstIp: String, val dstPort: Int,
+        val socket: DatagramSocket
+    ) {
+        @Volatile var lastActiveTime = System.currentTimeMillis()
+        @Volatile var closed = false
+
+        fun close() {
+            closed = true
+            try { socket.close() } catch (_: Exception) {}
         }
     }
 }

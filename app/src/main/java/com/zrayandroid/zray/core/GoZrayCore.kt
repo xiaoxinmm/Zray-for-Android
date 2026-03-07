@@ -2,6 +2,10 @@ package com.zrayandroid.zray.core
 
 import android.content.Context
 import kotlinx.coroutines.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -23,8 +27,6 @@ import java.net.Socket
  */
 class GoZrayCore(private val context: Context) : IZrayCore {
 
-    override val coreType = CoreType.GO_CORE
-
     @Volatile private var running = false
     @Volatile private var latencyMs: Long = -1
     @Volatile private var currentSocksPort = 0
@@ -32,6 +34,7 @@ class GoZrayCore(private val context: Context) : IZrayCore {
     private var process: Process? = null
     private var latencyJob: Job? = null
     private var stdoutJob: Job? = null
+    private var watchdogJob: Job? = null
 
     // 协程作用域，用于管理子进程 I/O 读取
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -98,6 +101,9 @@ class GoZrayCore(private val context: Context) : IZrayCore {
 
                 // 4. 启动 stdout 读取（stderr 已合并）
                 stdoutJob = scope.launch { readStream(proc.inputStream.bufferedReader(), "GO-CORE") }
+
+                // 启动 Watchdog 协程：确保 Go 进程在 Android 进程退出时被清理
+                startWatchdog(proc)
 
                 // 5. 等待端口就绪（最多 10 秒）
                 val portReady = waitForPort(socksPort, timeoutMs = 10000)
@@ -168,6 +174,7 @@ class GoZrayCore(private val context: Context) : IZrayCore {
         process = null
         latencyJob?.cancel()
         stdoutJob?.cancel()
+        watchdogJob?.cancel()
     }
 
     override fun isRunning() = running
@@ -175,7 +182,6 @@ class GoZrayCore(private val context: Context) : IZrayCore {
 
     override fun getStatus() = CoreStatus(
         running = running,
-        coreType = CoreType.GO_CORE,
         socksPort = currentSocksPort,
         latencyMs = latencyMs,
         remoteHost = remoteHost,
@@ -196,26 +202,23 @@ class GoZrayCore(private val context: Context) : IZrayCore {
     // ==================== 私有方法 ====================
 
     /**
-     * 生成 Go 客户端兼容的 config.json
+     * 生成 Go 客户端兼容的 config.json（安卓精简版）
+     * 仅需 global_port（唯一的 SOCKS5 端口）、remote_host、remote_port、user_hash
      */
     private fun generateConfig(config: String, socksPort: Int): String {
         try {
             if (config.trimStart().startsWith("{")) {
-                val json = org.json.JSONObject(config)
-                remoteHost = json.optString("remote_host", "")
-                remotePort = json.optInt("remote_port", 64433)
-                val userHash = json.optString("user_hash", "")
+                val jsonObj = Json.decodeFromString<JsonObject>(config)
+                remoteHost = jsonObj["remote_host"]?.jsonPrimitive?.content ?: ""
+                remotePort = jsonObj["remote_port"]?.jsonPrimitive?.intOrNull ?: 64433
+                val userHash = jsonObj["user_hash"]?.jsonPrimitive?.content ?: ""
 
-                return """
-                {
-                    "smart_port": "127.0.0.1:$socksPort",
-                    "global_port": "127.0.0.1:${socksPort + 1}",
-                    "remote_host": "$remoteHost",
-                    "remote_port": $remotePort,
-                    "user_hash": "$userHash",
-                    "geosite_path": ""
-                }
-                """.trimIndent()
+                return buildConfigJson(socksPort, userHash)
+            } else if (ZALinkParser.isZALink(config)) {
+                val lc = ZALinkParser.parse(config)
+                remoteHost = lc.host
+                remotePort = lc.port
+                return buildConfigJson(socksPort, lc.userHash)
             }
         } catch (e: Exception) {
             DebugLog.log("GO-CORE", "配置解析异常: ${e.message}")
@@ -223,6 +226,17 @@ class GoZrayCore(private val context: Context) : IZrayCore {
 
         // 回退：直接写入原始配置
         return config
+    }
+
+    private fun buildConfigJson(socksPort: Int, userHash: String): String {
+        return """
+        {
+            "global_port": "127.0.0.1:$socksPort",
+            "remote_host": "$remoteHost",
+            "remote_port": $remotePort,
+            "user_hash": "$userHash"
+        }
+        """.trimIndent()
     }
 
     /**
@@ -285,6 +299,44 @@ class GoZrayCore(private val context: Context) : IZrayCore {
                     latencyMs = -1
                 }
                 delay(5000)
+            }
+        }
+    }
+
+    /**
+     * Watchdog 协程：定期检查 Android 进程是否仍然存活。
+     * 如果 Android 进程即将被回收（通过检测进程状态），
+     * 确保 Go 子进程被强制终止，防止遗留僵尸进程耗电。
+     */
+    private fun startWatchdog(proc: Process) {
+        watchdogJob = scope.launch {
+            val myPid = android.os.Process.myPid()
+            DebugLog.log("GO-CORE", "Watchdog 启动, 监控 PID=$myPid")
+            try {
+                while (isActive && running && proc.isAlive) {
+                    delay(3000)
+                    // 检查 Android 进程是否还存在（通过 /proc/[pid] 目录判断）
+                    // 使用 try-catch 防止 SELinux 策略导致的文件系统访问限制
+                    val processAlive = try {
+                        java.io.File("/proc/$myPid").exists()
+                    } catch (_: Exception) {
+                        true // 如果无法检查，假设进程仍然存活
+                    }
+                    if (!processAlive) {
+                        DebugLog.log("GO-CORE", "Watchdog 检测到父进程已退出，强制清理子进程")
+                        proc.destroyForcibly()
+                        break
+                    }
+                }
+            } catch (_: CancellationException) {
+                // 正常取消
+            } catch (e: Exception) {
+                DebugLog.log("GO-CORE", "Watchdog 异常: ${e.message}")
+            }
+            // 最终保险：如果协程退出时子进程仍在运行，强制清理
+            if (proc.isAlive) {
+                DebugLog.log("GO-CORE", "Watchdog 退出时清理残留子进程")
+                proc.destroyForcibly()
             }
         }
     }

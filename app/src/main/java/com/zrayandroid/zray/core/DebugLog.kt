@@ -10,6 +10,9 @@ import java.util.*
 
 /**
  * 全局日志收集器 — 内存 + 文件双写。
+ *
+ * 当 debugMode 开启时，所有日志写入文件，供调试使用。
+ * 当 debugMode 关闭时，仅保留内存日志，不写入文件。
  */
 object DebugLog {
     private val _logs = MutableStateFlow<List<String>>(emptyList())
@@ -17,11 +20,37 @@ object DebugLog {
 
     private val sdf = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
     private val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-    private const val MAX_LINES = 500
+    private const val MAX_LINES = 2000
+
+    /** 敏感信息匹配模式，用于文件日志脱敏 */
+    private val SENSITIVE_PATTERNS = listOf(
+        Regex("""user[_]?[Hh]ash["']?\s*[:=]\s*["']?([^"'\s,\}]{4})[^"'\s,\}]*"""),
+        Regex("""(Authorization|Proxy-Authorization)\s*:\s*(\S{4})\S*""", RegexOption.IGNORE_CASE),
+        Regex("""(Cookie|Set-Cookie)\s*:\s*(\S{4})\S*""", RegexOption.IGNORE_CASE)
+    )
 
     private var logDir: File? = null
     private var fileWriter: FileWriter? = null
     private var currentDate: String = ""
+
+    /** 文件操作锁，保护 fileWriter 的并发访问 */
+    private val fileLock = Any()
+
+    /** 调试模式开关：开启后日志写入文件，关闭后仅内存日志 */
+    @Volatile
+    var debugMode: Boolean = false
+        set(value) {
+            field = value
+            synchronized(fileLock) {
+                if (value) {
+                    // 开启时确保文件已打开
+                    ensureFileOpen()
+                } else {
+                    // 关闭时释放文件写入器
+                    closeFileWriter()
+                }
+            }
+        }
 
     /**
      * 初始化文件日志。在 Application 或 Activity onCreate 中调用。
@@ -29,10 +58,12 @@ object DebugLog {
     fun init(context: Context) {
         try {
             logDir = File(context.filesDir, "logs").also { it.mkdirs() }
-            rotateFile()
-            log("LOG", "文件日志初始化完成: ${logDir?.absolutePath}")
+            if (debugMode) {
+                ensureFileOpen()
+            }
+            log("LOG", "日志系统初始化完成: ${logDir?.absolutePath}")
         } catch (e: Exception) {
-            android.util.Log.e("DebugLog", "文件日志初始化失败", e)
+            android.util.Log.e("DebugLog", "日志系统初始化失败", e)
         }
     }
 
@@ -50,8 +81,10 @@ object DebugLog {
             _logs.value = current
         }
 
-        // 文件
-        writeToFile(line)
+        // 调试模式时写入文件
+        if (debugMode) {
+            writeToFile(line)
+        }
     }
 
     fun clear() {
@@ -61,12 +94,13 @@ object DebugLog {
     fun getAllText(): String = _logs.value.joinToString("\n")
 
     /**
-     * 获取所有日志文件内容（用于一键导出/复制）
+     * 获取所有日志文件内容（用于查看器显示）
      */
     fun getFullFileLog(): String {
         return try {
             val dir = logDir ?: return getAllText()
             val files = dir.listFiles()?.sortedBy { it.name } ?: return getAllText()
+            if (files.isEmpty()) return "暂无日志文件"
             files.joinToString("\n\n") { f ->
                 "=== ${f.name} ===\n${f.readText()}"
             }
@@ -84,26 +118,99 @@ object DebugLog {
         return File(dir, "zray-$today.log").takeIf { it.exists() }
     }
 
-    private fun writeToFile(line: String) {
-        try {
-            val today = dateFmt.format(Date())
-            if (today != currentDate) {
-                rotateFile()
+    /**
+     * 获取日志目录
+     */
+    fun getLogDir(): File? = logDir
+
+    /**
+     * 获取所有日志文件列表（按日期排序）
+     */
+    fun getLogFiles(): List<File> {
+        val dir = logDir ?: return emptyList()
+        return dir.listFiles()?.sortedByDescending { it.name }?.toList() ?: emptyList()
+    }
+
+    /**
+     * 清理所有日志文件
+     */
+    fun clearLogFiles() {
+        synchronized(fileLock) {
+            try {
+                closeFileWriter()
+                logDir?.listFiles()?.forEach { it.delete() }
+                _logs.value = emptyList()
+                if (debugMode) {
+                    ensureFileOpen()
+                    log("LOG", "日志文件已清理")
+                }
+                Unit
+            } catch (e: Exception) {
+                android.util.Log.e("DebugLog", "清理日志文件失败", e)
             }
-            fileWriter?.apply {
-                write(line)
-                write("\n")
-                flush()
-            }
-        } catch (e: Exception) {
-            // 文件写入失败不影响主流程
         }
     }
 
-    private fun rotateFile() {
+    private fun writeToFile(line: String) {
+        synchronized(fileLock) {
+            try {
+                val today = dateFmt.format(Date())
+                if (today != currentDate) {
+                    rotateFile()
+                }
+                val sanitized = sanitize(line)
+                fileWriter?.apply {
+                    write(sanitized)
+                    write("\n")
+                    flush()
+                }
+            } catch (e: Exception) {
+                // 文件写入失败不影响主流程
+            }
+        }
+    }
+
+    /**
+     * 对敏感信息进行脱敏处理，保留前 4 个字符用于调试识别，其余用 *** 替换。
+     */
+    private fun sanitize(line: String): String {
+        var result = line
+        for (pattern in SENSITIVE_PATTERNS) {
+            result = pattern.replace(result) { match ->
+                val full = match.value
+                val group1 = match.groups[1]
+                if (group1 != null) {
+                    // 保留键名和前 4 字符，后面替换为 ***
+                    full.substring(0, full.indexOf(group1.value) + 4) + "***"
+                } else {
+                    // 无分组（如 Authorization header）— 保留键名前缀 + 前 4 字符值
+                    val colonIdx = full.indexOf(':')
+                    if (colonIdx >= 0) {
+                        full.substring(0, minOf(colonIdx + 6, full.length)) + "***"
+                    } else {
+                        full.take(8) + "***"
+                    }
+                }
+            }
+        }
+        return result
+    }
+
+    private fun ensureFileOpen() {
+        if (fileWriter == null || dateFmt.format(Date()) != currentDate) {
+            rotateFile()
+        }
+    }
+
+    private fun closeFileWriter() {
         try {
             fileWriter?.close()
-        } catch (e: Exception) {}
+        } catch (_: Exception) {}
+        fileWriter = null
+    }
+
+    private fun rotateFile() {
+        closeFileWriter()
 
         val dir = logDir ?: return
         currentDate = dateFmt.format(Date())
@@ -116,6 +223,6 @@ object DebugLog {
             dir.listFiles()?.forEach { f ->
                 if (f.lastModified() < cutoff) f.delete()
             }
-        } catch (e: Exception) {}
+        } catch (_: Exception) {}
     }
 }

@@ -1,6 +1,10 @@
 package com.zrayandroid.zray.core
 
-import org.json.JSONObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.concurrent.thread
@@ -10,6 +14,8 @@ import kotlin.concurrent.thread
  */
 object UpdateChecker {
     private const val REPO_API = "https://api.github.com/repos/xiaoxinmm/Zray-for-Android/releases/latest"
+
+    private val json = Json { ignoreUnknownKeys = true }
 
     data class UpdateInfo(
         val version: String,
@@ -37,20 +43,20 @@ object UpdateChecker {
                 }
 
                 val body = conn.inputStream.bufferedReader().readText()
-                val json = JSONObject(body)
-                val tagName = json.optString("tag_name", "").removePrefix("v")
-                val htmlUrl = json.optString("html_url", "")
-                val notes = json.optString("body", "")
+                val jsonObj = json.decodeFromString<JsonObject>(body)
+                val tagName = (jsonObj["tag_name"]?.jsonPrimitive?.content ?: "").removePrefix("v")
+                val htmlUrl = jsonObj["html_url"]?.jsonPrimitive?.content ?: ""
+                val notes = jsonObj["body"]?.jsonPrimitive?.content ?: ""
 
                 // 找 APK 下载链接
                 var apkUrl = htmlUrl
-                val assets = json.optJSONArray("assets")
+                val assets = jsonObj["assets"]?.jsonArray
                 if (assets != null) {
-                    for (i in 0 until assets.length()) {
-                        val asset = assets.getJSONObject(i)
-                        val name = asset.optString("name", "")
+                    for (element in assets) {
+                        val asset = element.jsonObject
+                        val name = asset["name"]?.jsonPrimitive?.content ?: ""
                         if (name.endsWith(".apk")) {
-                            apkUrl = asset.optString("browser_download_url", htmlUrl)
+                            apkUrl = asset["browser_download_url"]?.jsonPrimitive?.content ?: htmlUrl
                             break
                         }
                     }
