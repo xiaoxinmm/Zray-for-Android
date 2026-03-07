@@ -108,7 +108,6 @@ func outputStats() {
 		fmt.Printf("[STATS] up=%d down=%d up_speed=%d down_speed=%d conns=%d proxied=%d\n",
 			up, down, upSpeed, downSpeed, conns, proxied)
 
-		lastUp = up
-		lastDown = down
+		lastUp, lastDown = up, down
 	}
 }
