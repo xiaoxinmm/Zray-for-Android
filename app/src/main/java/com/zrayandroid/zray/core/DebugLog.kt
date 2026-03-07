@@ -24,10 +24,9 @@ object DebugLog {
 
     /** 敏感信息匹配模式，用于文件日志脱敏 */
     private val SENSITIVE_PATTERNS = listOf(
-        Regex("""user_hash["']?\s*[:=]\s*["']?([^"'\s,\}]{4})[^"'\s,\}]*"""),
-        Regex("""userHash["']?\s*[:=]\s*["']?([^"'\s,\}]{4})[^"'\s,\}]*"""),
-        Regex("""(Authorization|Proxy-Authorization)\s*:\s*\S{4}\S*""", RegexOption.IGNORE_CASE),
-        Regex("""(Cookie|Set-Cookie)\s*:\s*\S{4}\S*""", RegexOption.IGNORE_CASE)
+        Regex("""user[_]?[Hh]ash["']?\s*[:=]\s*["']?([^"'\s,\}]{4})[^"'\s,\}]*"""),
+        Regex("""(Authorization|Proxy-Authorization)\s*:\s*(\S{4})\S*""", RegexOption.IGNORE_CASE),
+        Regex("""(Cookie|Set-Cookie)\s*:\s*(\S{4})\S*""", RegexOption.IGNORE_CASE)
     )
 
     private var logDir: File? = null
@@ -184,8 +183,13 @@ object DebugLog {
                     // 保留键名和前 4 字符，后面替换为 ***
                     full.substring(0, full.indexOf(group1.value) + 4) + "***"
                 } else {
-                    // 无分组时保留前 20 字符
-                    full.take(20) + "***"
+                    // 无分组（如 Authorization header）— 保留键名前缀 + 前 4 字符值
+                    val colonIdx = full.indexOf(':')
+                    if (colonIdx >= 0) {
+                        full.substring(0, minOf(colonIdx + 6, full.length)) + "***"
+                    } else {
+                        full.take(8) + "***"
+                    }
                 }
             }
         }

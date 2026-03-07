@@ -107,6 +107,10 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
     // ==================== 网络状态监听（自动重连） ====================
     private val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
     private var lastNetworkType: String? = null
+    /** 网络切换后等待底层链路稳定的延迟时间 */
+    private companion object {
+        const val RECONNECT_DELAY_MS = 500L
+    }
 
     /** 网络状态回调：Wi-Fi ↔ 移动数据切换时自动重连 */
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -126,7 +130,7 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
                 viewModelScope.launch {
                     // 重启核心以重新初始化连接
                     coreManager.stop()
-                    delay(500)
+                    delay(RECONNECT_DELAY_MS)
                     val activeProfile = getActiveProfile() ?: return@launch
                     val config = if (activeProfile.server.isNotEmpty()) {
                         activeProfile.toConfigJson(_socksPort.value)

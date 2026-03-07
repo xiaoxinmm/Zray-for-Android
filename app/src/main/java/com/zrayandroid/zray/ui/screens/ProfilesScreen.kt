@@ -186,11 +186,24 @@ private fun AddProfileDialog(
                         onValueChange = {
                             server = it
                             // 校验：IP 地址或域名
-                            val ipv4 = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
-                            val ipv6 = Regex("^[0-9a-fA-F:]+$")
-                            val domain = Regex("^[a-zA-Z0-9]([a-zA-Z0-9\\-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*$")
-                            serverError = if (it.isBlank() || ipv4.matches(it) || ipv6.matches(it) || domain.matches(it)) null
-                            else "请输入有效的 IP 地址或域名"
+                            val trimmed = it.trim()
+                            serverError = when {
+                                trimmed.isEmpty() -> null
+                                trimmed.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")) -> {
+                                    // IPv4 — 验证每个八位组 0-255
+                                    val valid = trimmed.split(".").all { o -> o.toIntOrNull()?.let { v -> v in 0..255 } == true }
+                                    if (valid) null else "IP 地址八位组范围: 0-255"
+                                }
+                                trimmed.contains(":") && trimmed.matches(Regex("^[0-9a-fA-F:]+$")) -> {
+                                    // IPv6 — 基本格式检查
+                                    try {
+                                        java.net.InetAddress.getByName(trimmed)
+                                        null
+                                    } catch (_: Exception) { "无效的 IPv6 地址" }
+                                }
+                                trimmed.matches(Regex("^[a-zA-Z0-9]([a-zA-Z0-9\\-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*$")) -> null
+                                else -> "请输入有效的 IP 地址或域名"
+                            }
                         },
                         label = { Text("服务器地址") },
                         placeholder = { Text("1.2.3.4 或 domain.com") },
@@ -242,7 +255,7 @@ private fun AddProfileDialog(
                                         com.zrayandroid.zray.core.ZALinkParser.parse(trimmed)
                                         null // 解析成功
                                     } catch (e: Exception) {
-                                        "链接格式错误: ${e.message?.take(40) ?: "解析失败"}"
+                                        "链接格式错误: ${e.message?.take(100) ?: "解析失败"}"
                                     }
                                 }
                             }
@@ -298,7 +311,7 @@ private fun AddProfileDialog(
                             com.zrayandroid.zray.core.DebugLog.log("PROFILE", "ZA 链接解析成功: ${cfg.host}:${cfg.port}")
                             onConfirm(p)
                         } catch (e: Exception) {
-                            linkError = "解析失败: ${e.message?.take(40) ?: "未知错误"}"
+                            linkError = "解析失败: ${e.message?.take(100) ?: "未知错误"}"
                             com.zrayandroid.zray.core.DebugLog.log("ERROR", "ZA 链接解析失败: ${e.message}")
                         }
                     }
