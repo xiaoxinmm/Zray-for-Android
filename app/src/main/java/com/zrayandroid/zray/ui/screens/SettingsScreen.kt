@@ -30,6 +30,8 @@ fun SettingsScreen(
     goBinaryPath: String = "",
     allowInsecureSsl: Boolean = true,
     onInsecureSslToggle: (Boolean) -> Unit = {},
+    enableIpv6: Boolean = false,
+    onIpv6Toggle: (Boolean) -> Unit = {},
     dnsProtocol: DnsProtocol = DnsProtocol.DOH,
     onDnsProtocolChange: (DnsProtocol) -> Unit = {},
     dnsServer: String = ZrayDnsResolver.DEFAULT_DOH_SERVER,
@@ -310,6 +312,35 @@ fun SettingsScreen(
                     )
                 }
                 Switch(checked = allowInsecureSsl, onCheckedChange = onInsecureSslToggle)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ===== IPv6 代理支持 =====
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("IPv6 代理", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (enableIpv6) "已启用 — 代理 IPv4 + IPv6 流量"
+                        else "已关闭 — 仅代理 IPv4 流量",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+                Switch(checked = enableIpv6, onCheckedChange = onIpv6Toggle)
             }
         }
 

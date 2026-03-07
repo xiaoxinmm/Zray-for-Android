@@ -1,6 +1,10 @@
 package com.zrayandroid.zray
 
 import android.app.Application
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zrayandroid.zray.core.*
@@ -48,8 +52,11 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
     private val _selectedCoreType = MutableStateFlow(CoreType.KOTLIN_CORE)
     val selectedCoreType: StateFlow<CoreType> = _selectedCoreType.asStateFlow()
 
-    private val _allowInsecureSsl = MutableStateFlow(true)
+    private val _allowInsecureSsl = MutableStateFlow(false)
     val allowInsecureSsl: StateFlow<Boolean> = _allowInsecureSsl.asStateFlow()
+
+    private val _enableIpv6 = MutableStateFlow(false)
+    val enableIpv6: StateFlow<Boolean> = _enableIpv6.asStateFlow()
 
     // ==================== DNS 配置 ====================
     private val _dnsProtocol = MutableStateFlow(DnsProtocol.DOH)
@@ -97,12 +104,72 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
     private val _showUpdateDialog = MutableStateFlow(false)
     val showUpdateDialog: StateFlow<Boolean> = _showUpdateDialog.asStateFlow()
 
+    // ==================== 网络状态监听（自动重连） ====================
+    private val connectivityManager = context.getSystemService(ConnectivityManager::class.java)
+    private var lastNetworkType: String? = null
+
+    /** 网络状态回调：Wi-Fi ↔ 移动数据切换时自动重连 */
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            val isWifi = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+            val isCellular = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+            val currentType = when {
+                isWifi -> "WIFI"
+                isCellular -> "CELLULAR"
+                else -> "OTHER"
+            }
+            val prev = lastNetworkType
+            lastNetworkType = currentType
+            // 仅在已连接且网络类型变化时触发重连
+            if (prev != null && prev != currentType && _isConnected.value) {
+                DebugLog.log("NET", "网络切换: $prev → $currentType，自动重连代理...")
+                viewModelScope.launch {
+                    // 重启核心以重新初始化连接
+                    coreManager.stop()
+                    delay(500)
+                    val activeProfile = getActiveProfile() ?: return@launch
+                    val config = if (activeProfile.server.isNotEmpty()) {
+                        activeProfile.toConfigJson(_socksPort.value)
+                    } else {
+                        activeProfile.link
+                    }
+                    if (config.isBlank()) return@launch
+                    coreManager.start(config, _socksPort.value) { success, error ->
+                        if (success) {
+                            DebugLog.log("NET", "自动重连成功")
+                        } else {
+                            DebugLog.log("ERROR", "自动重连失败: $error")
+                            _errorMessage.value = "网络切换后重连失败: $error"
+                        }
+                    }
+                }
+            }
+        }
+
+        override fun onLost(network: Network) {
+            DebugLog.log("NET", "网络连接丢失")
+            lastNetworkType = null
+        }
+    }
+
     // ==================== 初始化 ====================
 
     init {
         loadData()
         checkForUpdate()
         startTrafficTicker()
+        registerNetworkCallback()
+    }
+
+    private fun registerNetworkCallback() {
+        try {
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            connectivityManager?.registerNetworkCallback(request, networkCallback)
+        } catch (e: Exception) {
+            DebugLog.log("NET", "注册网络监听失败: ${e.message}")
+        }
     }
 
     private fun loadData() {
@@ -115,6 +182,9 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
             _socksPort.value = savedPort
             _allowInsecureSsl.value = savedInsecureSsl
             coreManager.allowInsecureSsl = savedInsecureSsl
+            // IPv6
+            val savedIpv6 = ProfileStore.loadEnableIpv6(context)
+            _enableIpv6.value = savedIpv6
             // DNS 配置
             val savedDnsProtocol = ProfileStore.loadDnsProtocol(context)
             val savedDnsServer = ProfileStore.loadDnsServer(context)
@@ -199,6 +269,14 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
             ProfileStore.saveAllowInsecureSsl(context, allow)
         }
         DebugLog.log("SETTINGS", "SSL 不安全证书: ${if (allow) "允许" else "禁止"}")
+    }
+
+    fun setEnableIpv6(enable: Boolean) {
+        _enableIpv6.value = enable
+        viewModelScope.launch {
+            ProfileStore.saveEnableIpv6(context, enable)
+        }
+        DebugLog.log("SETTINGS", "IPv6 代理: ${if (enable) "开启" else "关闭"}")
     }
 
     fun setDnsProtocol(protocol: DnsProtocol) {
@@ -337,6 +415,7 @@ class ZrayViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        try { connectivityManager?.unregisterNetworkCallback(networkCallback) } catch (_: Exception) {}
         coreManager.destroy()
     }
 }

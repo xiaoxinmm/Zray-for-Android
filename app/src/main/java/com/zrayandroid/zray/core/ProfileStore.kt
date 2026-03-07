@@ -19,6 +19,7 @@ object ProfileStore {
     private val ACTIVE_ID_KEY = stringPreferencesKey("active_profile_id")
     private val SOCKS_PORT_KEY = intPreferencesKey("socks_port")
     private val ALLOW_INSECURE_SSL_KEY = booleanPreferencesKey("allow_insecure_ssl")
+    private val ENABLE_IPV6_KEY = booleanPreferencesKey("enable_ipv6")
     private val DNS_PROTOCOL_KEY = stringPreferencesKey("dns_protocol")
     private val DNS_SERVER_KEY = stringPreferencesKey("dns_server")
 
@@ -75,9 +76,17 @@ object ProfileStore {
         context.dataStore.edit { it[ALLOW_INSECURE_SSL_KEY] = allow }
     }
 
-    /** 默认 true 以保持向后兼容（允许自签证书） */
+    /** 默认 false 以强制安全 SSL 校验 */
     suspend fun loadAllowInsecureSsl(context: Context): Boolean {
-        return context.dataStore.data.first()[ALLOW_INSECURE_SSL_KEY] ?: true
+        return context.dataStore.data.first()[ALLOW_INSECURE_SSL_KEY] ?: false
+    }
+
+    suspend fun saveEnableIpv6(context: Context, enable: Boolean) {
+        context.dataStore.edit { it[ENABLE_IPV6_KEY] = enable }
+    }
+
+    suspend fun loadEnableIpv6(context: Context): Boolean {
+        return context.dataStore.data.first()[ENABLE_IPV6_KEY] ?: false
     }
 
     /**

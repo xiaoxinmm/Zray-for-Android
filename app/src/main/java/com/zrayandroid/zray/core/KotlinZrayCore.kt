@@ -10,6 +10,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.security.SecureRandom
+import java.util.concurrent.Executors
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLSocket
@@ -52,17 +53,19 @@ class KotlinZrayCore : IZrayCore {
     private var serverSocket: ServerSocket? = null
     private var latencyJob: Job? = null
 
-    /** 是否允许不安全的 SSL 证书（跳过校验），默认 true 保持向后兼容 */
+    /** 是否允许不安全的 SSL 证书（跳过校验），默认 false 强制安全校验 */
     @Volatile
-    var allowInsecureSsl: Boolean = true
+    var allowInsecureSsl: Boolean = false
 
     // 协程作用域，用于管理所有并发任务
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // 独立的 relay 调度器 — 允许高达 256 个并发阻塞线程，
-    // 避免 relay 操作耗尽共享 Dispatchers.IO 线程池（默认 64 线程），
-    // 导致新连接排队、网络断连。
-    private val relayDispatcher = Dispatchers.IO.limitedParallelism(256)
+    // 独立的 relay 调度器 — 使用无限制的缓存线程池，
+    // 避免极端负载下固定并行限制成为瓶颈。
+    // 空闲线程在 60 秒后自动回收，不会浪费内存。
+    private val relayDispatcher = Executors.newCachedThreadPool { r ->
+        Thread(r, "zray-relay").apply { isDaemon = true }
+    }.asCoroutineDispatcher()
 
     private var remoteHost = ""
     private var remotePort = 64433

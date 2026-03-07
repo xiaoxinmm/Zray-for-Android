@@ -34,7 +34,7 @@ class ZrayCoreManager(private val context: Context) {
 
     /** 是否允许不安全的 SSL 证书 */
     @Volatile
-    var allowInsecureSsl: Boolean = true
+    var allowInsecureSsl: Boolean = false
 
     /** 操作互斥锁，保证核心切换的线程安全 */
     private val mutex = Mutex()

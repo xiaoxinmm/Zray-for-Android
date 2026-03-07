@@ -40,7 +40,12 @@ object ZALinkParser {
      * @param key 解密密钥，为空则使用默认密钥
      */
     fun parse(link: String, key: String = ""): LinkConfig {
-        val actualKey = if (key.isEmpty()) DEFAULT_KEY else key
+        val actualKey = if (key.isEmpty()) {
+            DebugLog.log("SECURITY", "⚠️ 使用默认密钥解析 ZA 链接。建议在服务端自定义密钥以提高安全性。")
+            DEFAULT_KEY
+        } else {
+            key
+        }
         val upper = link.uppercase()
         if (!upper.startsWith("ZA://")) {
             throw IllegalArgumentException("无效 ZA 链接：缺少 ZA:// 前缀")

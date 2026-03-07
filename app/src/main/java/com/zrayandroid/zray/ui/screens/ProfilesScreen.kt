@@ -144,6 +144,9 @@ private fun AddProfileDialog(
     var port by remember { mutableStateOf("64433") }
     var userHash by remember { mutableStateOf("") }
     var linkInput by remember { mutableStateOf("") }
+    var linkError by remember { mutableStateOf<String?>(null) }
+    var serverError by remember { mutableStateOf<String?>(null) }
+    var portError by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -180,20 +183,37 @@ private fun AddProfileDialog(
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = server,
-                        onValueChange = { server = it },
+                        onValueChange = {
+                            server = it
+                            // 校验：IP 地址或域名
+                            val ipv4 = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
+                            val ipv6 = Regex("^[0-9a-fA-F:]+$")
+                            val domain = Regex("^[a-zA-Z0-9]([a-zA-Z0-9\\-]*[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9\\-]*[a-zA-Z0-9])?)*$")
+                            serverError = if (it.isBlank() || ipv4.matches(it) || ipv6.matches(it) || domain.matches(it)) null
+                            else "请输入有效的 IP 地址或域名"
+                        },
                         label = { Text("服务器地址") },
                         placeholder = { Text("1.2.3.4 或 domain.com") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
+                        isError = serverError != null,
+                        supportingText = serverError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
                         shape = RoundedCornerShape(12.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = port,
-                        onValueChange = { port = it },
+                        onValueChange = {
+                            port = it
+                            val p = it.toIntOrNull()
+                            portError = if (it.isBlank() || (p != null && p in 1..65535)) null
+                            else "端口范围: 1-65535"
+                        },
                         label = { Text("端口") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
+                        isError = portError != null,
+                        supportingText = portError?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         shape = RoundedCornerShape(12.dp)
                     )
@@ -209,11 +229,38 @@ private fun AddProfileDialog(
                 } else {
                     OutlinedTextField(
                         value = linkInput,
-                        onValueChange = { linkInput = it },
+                        onValueChange = {
+                            linkInput = it
+                            val trimmed = it.trim()
+                            linkError = when {
+                                trimmed.isEmpty() -> null
+                                !trimmed.startsWith("ZA://", ignoreCase = true) -> "链接必须以 ZA:// 开头"
+                                trimmed.length < 10 -> "链接内容太短，请检查是否完整"
+                                else -> {
+                                    // 尝试即时解析校验
+                                    try {
+                                        com.zrayandroid.zray.core.ZALinkParser.parse(trimmed)
+                                        null // 解析成功
+                                    } catch (e: Exception) {
+                                        "链接格式错误: ${e.message?.take(40) ?: "解析失败"}"
+                                    }
+                                }
+                            }
+                        },
                         label = { Text("粘贴 ZA:// 链接") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = false,
                         maxLines = 4,
+                        isError = linkError != null,
+                        supportingText = if (linkError != null) {
+                            { Text(linkError!!, color = MaterialTheme.colorScheme.error) }
+                        } else if (linkInput.trim().startsWith("ZA://", ignoreCase = true) && linkInput.trim().length >= 10) {
+                            // 校验通过时显示绿色提示
+                            try {
+                                val cfg = com.zrayandroid.zray.core.ZALinkParser.parse(linkInput.trim())
+                                { Text("✓ ${cfg.host}:${cfg.port}", color = MaterialTheme.colorScheme.primary) }
+                            } catch (_: Exception) { null }
+                        } else null,
                         shape = RoundedCornerShape(12.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
@@ -228,7 +275,7 @@ private fun AddProfileDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    if (mode == "manual" && server.isNotBlank()) {
+                    if (mode == "manual" && server.isNotBlank() && serverError == null && portError == null) {
                         val p = Profile(
                             id = java.util.UUID.randomUUID().toString(),
                             name = name.ifBlank { server },
@@ -237,7 +284,7 @@ private fun AddProfileDialog(
                             userHash = userHash.trim()
                         )
                         onConfirm(p)
-                    } else if (mode == "link" && linkInput.trim().startsWith("ZA://", ignoreCase = true)) {
+                    } else if (mode == "link" && linkInput.trim().startsWith("ZA://", ignoreCase = true) && linkError == null) {
                         try {
                             val cfg = com.zrayandroid.zray.core.ZALinkParser.parse(linkInput.trim())
                             val p = Profile(
@@ -251,19 +298,13 @@ private fun AddProfileDialog(
                             com.zrayandroid.zray.core.DebugLog.log("PROFILE", "ZA 链接解析成功: ${cfg.host}:${cfg.port}")
                             onConfirm(p)
                         } catch (e: Exception) {
+                            linkError = "解析失败: ${e.message?.take(40) ?: "未知错误"}"
                             com.zrayandroid.zray.core.DebugLog.log("ERROR", "ZA 链接解析失败: ${e.message}")
-                            // 解析失败存原始链接
-                            val p = Profile(
-                                id = java.util.UUID.randomUUID().toString(),
-                                name = "ZA 节点 ${System.currentTimeMillis() % 1000}",
-                                link = linkInput.trim()
-                            )
-                            onConfirm(p)
                         }
                     }
                 },
-                enabled = if (mode == "manual") server.isNotBlank()
-                         else linkInput.trim().startsWith("ZA://", ignoreCase = true)
+                enabled = if (mode == "manual") server.isNotBlank() && serverError == null && portError == null
+                         else linkInput.trim().startsWith("ZA://", ignoreCase = true) && linkError == null
             ) { Text("添加") }
         },
         dismissButton = {

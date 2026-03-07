@@ -154,6 +154,7 @@ fun ZrayApp(
     val showUpdateDialog by vm.showUpdateDialog.collectAsState()
     val selectedCoreType by vm.selectedCoreType.collectAsState()
     val allowInsecureSsl by vm.allowInsecureSsl.collectAsState()
+    val enableIpv6 by vm.enableIpv6.collectAsState()
     val dnsProtocol by vm.dnsProtocol.collectAsState()
     val dnsServer by vm.dnsServer.collectAsState()
     val routingConfig by vm.routingConfig.collectAsState()
@@ -246,7 +247,7 @@ fun ZrayApp(
                                     onStartService = onStartService,
                                     onPrepareVpn = { onVpnReady ->
                                         activity.prepareVpn {
-                                            startVpn(context, socksPort, routingConfig)
+                                            startVpn(context, socksPort, routingConfig, enableIpv6)
                                             onVpnReady()
                                         }
                                     }
@@ -307,6 +308,8 @@ fun ZrayApp(
                         goBinaryPath = vm.coreManager.getGoBinaryPath(),
                         allowInsecureSsl = allowInsecureSsl,
                         onInsecureSslToggle = { vm.setAllowInsecureSsl(it) },
+                        enableIpv6 = enableIpv6,
+                        onIpv6Toggle = { vm.setEnableIpv6(it) },
                         dnsProtocol = dnsProtocol,
                         onDnsProtocolChange = { vm.setDnsProtocol(it) },
                         dnsServer = dnsServer,
@@ -376,11 +379,12 @@ fun ZrayApp(
     }
 }
 
-private fun startVpn(context: android.content.Context, socksPort: Int, config: com.zrayandroid.zray.core.RoutingConfig) {
+private fun startVpn(context: android.content.Context, socksPort: Int, config: com.zrayandroid.zray.core.RoutingConfig, enableIpv6: Boolean = false) {
     val intent = android.content.Intent(context, com.zrayandroid.zray.service.ZrayVpnService::class.java).apply {
         action = com.zrayandroid.zray.service.ZrayVpnService.ACTION_START
         putExtra(com.zrayandroid.zray.service.ZrayVpnService.EXTRA_SOCKS_PORT, socksPort)
         putExtra(com.zrayandroid.zray.service.ZrayVpnService.EXTRA_MODE, config.mode.name)
+        putExtra(com.zrayandroid.zray.service.ZrayVpnService.EXTRA_ENABLE_IPV6, enableIpv6)
         putStringArrayListExtra(com.zrayandroid.zray.service.ZrayVpnService.EXTRA_SELECTED_APPS,
             ArrayList(config.selectedApps))
     }

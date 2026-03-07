@@ -34,11 +34,15 @@ class ZrayVpnService : VpnService() {
         const val EXTRA_SOCKS_PORT = "socks_port"
         const val EXTRA_MODE = "proxy_mode"
         const val EXTRA_SELECTED_APPS = "selected_apps"
+        const val EXTRA_ENABLE_IPV6 = "enable_ipv6"
         const val CHANNEL_ID = "zray_vpn"
         const val NOTIFICATION_ID = 2
         private const val VPN_ADDRESS = "10.0.0.2"
+        private const val VPN_ADDRESS_V6 = "fd00::2"
         private const val VPN_ROUTE = "0.0.0.0"
+        private const val VPN_ROUTE_V6 = "::"
         private const val VPN_DNS = "8.8.8.8"
+        private const val VPN_DNS_V6 = "2001:4860:4860::8888"
         private const val VPN_MTU = 1500
         private const val SOCKS5_HANDSHAKE_TIMEOUT = 30000
         private const val SOCKS5_DATA_POLL_TIMEOUT = 100
@@ -50,6 +54,7 @@ class ZrayVpnService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private val running = AtomicBoolean(false)
     private var socksPort = 1081
+    private var enableIpv6 = false
     private val tcpSessions = ConcurrentHashMap<Int, TcpSession>()
     private val udpSessions = ConcurrentHashMap<Long, UdpSession>()
     private var seqCounter = 100000
@@ -68,6 +73,7 @@ class ZrayVpnService : VpnService() {
             ACTION_STOP -> { stopVpn(); return START_NOT_STICKY }
             ACTION_START -> {
                 socksPort = intent.getIntExtra(EXTRA_SOCKS_PORT, 1081)
+                enableIpv6 = intent.getBooleanExtra(EXTRA_ENABLE_IPV6, false)
                 val mode = try { ProxyMode.valueOf(intent.getStringExtra(EXTRA_MODE) ?: "") } catch (_: Exception) { ProxyMode.VPN_PER_APP }
                 val apps = intent.getStringArrayListExtra(EXTRA_SELECTED_APPS)?.toSet() ?: emptySet()
                 if (mode == ProxyMode.VPN_PER_APP && apps.isEmpty()) {
@@ -82,7 +88,7 @@ class ZrayVpnService : VpnService() {
 
     private fun startVpn(mode: ProxyMode, selectedApps: Set<String>) {
         if (running.get()) return
-        DebugLog.log("VPN", "启动 VPN: mode=$mode, port=$socksPort, apps=${selectedApps.size}")
+        DebugLog.log("VPN", "启动 VPN: mode=$mode, port=$socksPort, ipv6=$enableIpv6, apps=${selectedApps.size}")
 
         val builder = Builder()
             .setSession("Zray VPN")
@@ -91,6 +97,13 @@ class ZrayVpnService : VpnService() {
             .addRoute(VPN_ROUTE, 0)
             .addDnsServer(VPN_DNS)
             .addDnsServer("8.8.4.4")
+
+        // IPv6 支持
+        if (enableIpv6) {
+            builder.addAddress(VPN_ADDRESS_V6, 128)
+            builder.addRoute(VPN_ROUTE_V6, 0)
+            builder.addDnsServer(VPN_DNS_V6)
+        }
 
         // 分应用：选中的应用走代理
         if (mode == ProxyMode.VPN_PER_APP && selectedApps.isNotEmpty()) {
@@ -353,9 +366,24 @@ class ZrayVpnService : VpnService() {
                         // 构造 DNS 响应包（源/目对调）写回 TUN
                         val udpResp = buildUdpPacket(dstIp, srcIp, dstPort, srcPort, response)
                         if (udpResp != null) synchronized(out) { out.write(udpResp); out.flush() }
+                    } else {
+                        // DNS 解析返回 null — 返回 NXDOMAIN 阻断，防止回退到系统 DNS 泄露
+                        val nxResp = buildDnsNxdomain(payload)
+                        if (nxResp != null) {
+                            val udpResp = buildUdpPacket(dstIp, srcIp, dstPort, srcPort, nxResp)
+                            if (udpResp != null) synchronized(out) { out.write(udpResp); out.flush() }
+                        }
                     }
                 } catch (e: Exception) {
-                    if (running.get()) DebugLog.log("VPN", "DNS 解析失败 → $dstIp: ${e.message}")
+                    if (running.get()) DebugLog.log("VPN", "DNS 解析失败(已拦截) → $dstIp: ${e.message}")
+                    // DoH/DoT 解析失败 — 返回 SERVFAIL 阻断流量，不回退到系统 DNS
+                    try {
+                        val failResp = buildDnsServfail(payload)
+                        if (failResp != null) {
+                            val udpResp = buildUdpPacket(dstIp, srcIp, dstPort, srcPort, failResp)
+                            if (udpResp != null) synchronized(out) { out.write(udpResp); out.flush() }
+                        }
+                    } catch (_: Exception) {}
                 }
             }
             return
@@ -534,6 +562,38 @@ class ZrayVpnService : VpnService() {
         System.arraycopy(pkt, off, pseudo, 12, len)
         pseudo[12+16] = 0; pseudo[12+17] = 0
         return checksum(pseudo, 0, pseudo.size)
+    }
+
+    /**
+     * 构造 DNS NXDOMAIN 响应（返回码 3），阻断域名解析。
+     * 复制原始请求的 ID 和问题段，设置 QR=1, RCODE=NXDOMAIN。
+     */
+    private fun buildDnsNxdomain(query: ByteArray): ByteArray? {
+        if (query.size < 12) return null
+        val resp = query.copyOf()
+        // QR=1, Opcode=0, AA=0, TC=0, RD=1 → 0x81
+        resp[2] = 0x81.toByte()
+        // RA=1, Z=0, RCODE=3 (NXDOMAIN) → 0x83
+        resp[3] = 0x83.toByte()
+        // ANCOUNT=0, NSCOUNT=0, ARCOUNT=0
+        resp[6] = 0; resp[7] = 0; resp[8] = 0; resp[9] = 0; resp[10] = 0; resp[11] = 0
+        return resp
+    }
+
+    /**
+     * 构造 DNS SERVFAIL 响应（返回码 2），告知客户端服务器错误。
+     * 用于 DoH/DoT 解析异常时阻断流量，防止回退到系统 DNS。
+     */
+    private fun buildDnsServfail(query: ByteArray): ByteArray? {
+        if (query.size < 12) return null
+        val resp = query.copyOf()
+        // QR=1, Opcode=0, AA=0, TC=0, RD=1 → 0x81
+        resp[2] = 0x81.toByte()
+        // RA=1, Z=0, RCODE=2 (SERVFAIL) → 0x82
+        resp[3] = 0x82.toByte()
+        // ANCOUNT=0, NSCOUNT=0, ARCOUNT=0
+        resp[6] = 0; resp[7] = 0; resp[8] = 0; resp[9] = 0; resp[10] = 0; resp[11] = 0
+        return resp
     }
 
     private fun createNotificationChannel() {

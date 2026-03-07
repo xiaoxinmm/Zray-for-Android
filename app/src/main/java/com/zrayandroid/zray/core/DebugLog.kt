@@ -20,7 +20,15 @@ object DebugLog {
 
     private val sdf = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
     private val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-    private const val MAX_LINES = 500
+    private const val MAX_LINES = 2000
+
+    /** 敏感信息匹配模式，用于文件日志脱敏 */
+    private val SENSITIVE_PATTERNS = listOf(
+        Regex("""user_hash["']?\s*[:=]\s*["']?([^"'\s,\}]{4})[^"'\s,\}]*"""),
+        Regex("""userHash["']?\s*[:=]\s*["']?([^"'\s,\}]{4})[^"'\s,\}]*"""),
+        Regex("""(Authorization|Proxy-Authorization)\s*:\s*\S{4}\S*""", RegexOption.IGNORE_CASE),
+        Regex("""(Cookie|Set-Cookie)\s*:\s*\S{4}\S*""", RegexOption.IGNORE_CASE)
+    )
 
     private var logDir: File? = null
     private var fileWriter: FileWriter? = null
@@ -151,8 +159,9 @@ object DebugLog {
                 if (today != currentDate) {
                     rotateFile()
                 }
+                val sanitized = sanitize(line)
                 fileWriter?.apply {
-                    write(line)
+                    write(sanitized)
                     write("\n")
                     flush()
                 }
@@ -160,6 +169,27 @@ object DebugLog {
                 // 文件写入失败不影响主流程
             }
         }
+    }
+
+    /**
+     * 对敏感信息进行脱敏处理，保留前 4 个字符用于调试识别，其余用 *** 替换。
+     */
+    private fun sanitize(line: String): String {
+        var result = line
+        for (pattern in SENSITIVE_PATTERNS) {
+            result = pattern.replace(result) { match ->
+                val full = match.value
+                val group1 = match.groups[1]
+                if (group1 != null) {
+                    // 保留键名和前 4 字符，后面替换为 ***
+                    full.substring(0, full.indexOf(group1.value) + 4) + "***"
+                } else {
+                    // 无分组时保留前 20 字符
+                    full.take(20) + "***"
+                }
+            }
+        }
+        return result
     }
 
     private fun ensureFileOpen() {
