@@ -240,6 +240,16 @@ private fun AddProfileDialog(
                         shape = RoundedCornerShape(12.dp)
                     )
                 } else {
+                    // 预先计算链接解析结果，避免在 composable 参数中使用 try/catch
+                    val linkPreview = remember(linkInput, linkError) {
+                        if (linkError == null && linkInput.trim().startsWith("ZA://", ignoreCase = true) && linkInput.trim().length >= 10) {
+                            try {
+                                val cfg = com.zrayandroid.zray.core.ZALinkParser.parse(linkInput.trim())
+                                "✓ ${cfg.host}:${cfg.port}"
+                            } catch (_: Exception) { null }
+                        } else null
+                    }
+
                     OutlinedTextField(
                         value = linkInput,
                         onValueChange = {
@@ -267,12 +277,8 @@ private fun AddProfileDialog(
                         isError = linkError != null,
                         supportingText = if (linkError != null) {
                             { Text(linkError!!, color = MaterialTheme.colorScheme.error) }
-                        } else if (linkInput.trim().startsWith("ZA://", ignoreCase = true) && linkInput.trim().length >= 10) {
-                            // 校验通过时显示绿色提示
-                            try {
-                                val cfg = com.zrayandroid.zray.core.ZALinkParser.parse(linkInput.trim())
-                                { Text("✓ ${cfg.host}:${cfg.port}", color = MaterialTheme.colorScheme.primary) }
-                            } catch (_: Exception) { null }
+                        } else if (linkPreview != null) {
+                            { Text(linkPreview, color = MaterialTheme.colorScheme.primary) }
                         } else null,
                         shape = RoundedCornerShape(12.dp)
                     )
