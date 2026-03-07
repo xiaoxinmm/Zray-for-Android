@@ -27,6 +27,11 @@ data class Profile(
     val link: String = "",
     @Transient val isActive: Boolean = false
 ) {
+    /**
+     * 生成最小配置 JSON（仅包含远程服务器信息）。
+     * GoZrayCore.generateConfig() 会从此输出中提取 remote_host/remote_port/user_hash，
+     * 并独立生成包含端口设置的完整 Go 客户端配置。
+     */
     fun toConfigJson(): String = """
         {"remote_host":"$server","remote_port":$port,"user_hash":"$userHash"}
     """.trimIndent()
